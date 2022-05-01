@@ -42,6 +42,7 @@ async fn core(
     let (tx_event, _) = channel(1);
     let (tx_wrapper, _) = channel(1);
     let (tx_block, _) = channel(1);
+    let (_, rx_stop_start) = channel(1);
     let mut core = Core::new(
         name,
         committee(),
@@ -57,6 +58,7 @@ async fn core(
         tx_event,
         tx_wrapper,
         tx_block,
+        rx_stop_start,
     );
     tokio::spawn(async move {
         core.run().await;

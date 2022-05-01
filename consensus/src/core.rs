@@ -85,6 +85,7 @@ pub struct Core {
     tx_event: Sender<Event>,
     tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
     tx_blocks: Sender<VecDeque<Block>>,
+    rx_stop_start: Receiver<bool>,
 }
 
 impl Core {
@@ -104,6 +105,7 @@ impl Core {
         tx_event: Sender<Event>,
         tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
         tx_blocks: Sender<VecDeque<Block>>,
+        rx_stop_start: Receiver<bool>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
         let timer = Timer::new(parameters.timeout_delay);
@@ -131,6 +133,7 @@ impl Core {
             tx_event,
             tx_wrapper,
             tx_blocks,
+            rx_stop_start,
         }
     }
 
@@ -542,6 +545,14 @@ impl Core {
         Ok(())
     }
 
+    async fn handle_stop_start(&mut self) -> ConsensusResult<()> {
+        debug!("Received stop------------------------------------------------------");
+        self.rx_stop_start.recv().await;
+        debug!("Starting again-----------------------------------------------------");
+        // TODO: maybe reset timer?
+        Ok(())
+    }
+
     pub async fn run(&mut self) {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
@@ -575,6 +586,7 @@ impl Core {
                         },
                     }
                 },
+                Some(_) = self.rx_stop_start.recv() => self.handle_stop_start().await,
                 () = &mut self.timer => self.local_timeout_round().await,
                 else => break,
             };

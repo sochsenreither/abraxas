@@ -1,3 +1,4 @@
+use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters};
 use crate::core::{ConsensusMessage, Core};
 use crate::fallback::Fallback;
@@ -6,7 +7,7 @@ use crate::leader::LeaderElector;
 use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
 use crate::messages::{Block, RecoveryVote};
 use crate::synchronizer::Synchronizer;
-use crate::{SeqNumber, MempoolWrapper};
+use crate::{MempoolWrapper, SeqNumber};
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, info};
 use std::collections::VecDeque;
@@ -37,13 +38,16 @@ pub enum Event {
 
 pub struct OptimisticCompiler {
     name: PublicKey,
+    committee: Committee,
     era: SeqNumber,
     loopback: usize,
     l: usize,
     k: usize,
     k_voted: usize,
     state: State,
+    aggregator: Aggregator,
     signature_service: SignatureService,
+    network_filter: Sender<FilterInput>,
     main_chain: Vec<Block>,
     vaba_chain: Vec<Block>,
     rx_main: Receiver<ConsensusMessage>, // Incoming consensus messages
@@ -52,6 +56,8 @@ pub struct OptimisticCompiler {
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols
     tx_vaba: Sender<ConsensusMessage>,   // Channel for forwarding messages to sub protocols
     tx_cert: Sender<Digest>, // Used to send recovery certificates to the mempool wrapper
+    tx_stop_start: Sender<bool>, // Used to stop and start jolteon
+    blub: bool,
 }
 
 impl OptimisticCompiler {
@@ -70,6 +76,9 @@ impl OptimisticCompiler {
     ) -> Self {
         // Channel for receiving and sending events for the sub protocols.
         let (tx_event, rx_event) = channel(1_000);
+
+        // Channel to stop and start jolteon
+        let (tx_stop_start, rx_stop_start) = channel(100);
 
         // Channel for sending blocks from the sub protocols to the main protocol.
         let (tx_blocks, rx_blocks) = channel(1_000);
@@ -132,6 +141,7 @@ impl OptimisticCompiler {
             tx_event.clone(),
             tx_wrapper.clone(),
             tx_blocks.clone(),
+            rx_stop_start,
         );
 
         // Create one vaba instance
@@ -167,13 +177,16 @@ impl OptimisticCompiler {
 
         Self {
             name,
+            committee: committee.clone(),
             era: 1,
             loopback: 10,
             l: 0,
             k: 0,
             k_voted: 0,
             state: State::Steady,
+            aggregator: Aggregator::new(committee.clone()),
             signature_service: signature_service.clone(),
+            network_filter: tx_filter.clone(),
             main_chain: Vec::new(),
             vaba_chain: Vec::new(),
             rx_main,
@@ -182,6 +195,8 @@ impl OptimisticCompiler {
             tx_jolteon,
             tx_vaba,
             tx_cert,
+            tx_stop_start,
+            blub: false,
         }
     }
 
@@ -219,12 +234,34 @@ impl OptimisticCompiler {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
-                        // debug!("Testing Recovery Vote!");
-                        // let b = block.clone();
-                        // let recovery_vote = RecoveryVote::new(12, 2, self.signature_service.clone(), b.qc, self.name).await;
-                        // debug!("Recovery vote: {:?}", recovery_vote);
-                        // let res = recovery_vote.verify();
-                        // debug!("Result of verification: {:?}", res);
+                        if !self.blub {
+                            let b = block.clone();
+                            let recovery_vote = RecoveryVote::new(
+                                self.name,
+                                12,
+                                2,
+                                self.signature_service.clone(),
+                                b.qc,
+                                self.name,
+                            )
+                            .await;
+                            debug!("Multicasting Recovery Vote!");
+                            Synchronizer::transmit(
+                                ConsensusMessage::Recovery(recovery_vote.clone()),
+                                &self.name,
+                                None,
+                                &self.network_filter,
+                                &self.committee,
+                            )
+                            .await
+                            .unwrap();
+                            let res = self.aggregator.add_recovery_vote(recovery_vote);
+                            if res {
+                                debug!("Received enough recovery votes, inputting cert");
+                            }
+                            self.blub = true;
+                        }
+
                         self.vaba_chain.push(block);
                         self.ss_try_resolve();
                         self.rs_try_vote().await;
@@ -249,10 +286,13 @@ impl OptimisticCompiler {
 
     fn handle_recovery_vote(&mut self, rv: RecoveryVote) {
         debug!("Received recovery vote {:?}", rv);
-        // TODO: implement me
-        // TODO: check signature
-        // TODO: add to aggregator
-        // TODO: if we have enough recovery votes for era e input to vaba
+        if let Ok(_) = rv.verify() {
+            let res = self.aggregator.add_recovery_vote(rv);
+            if res {
+                debug!("Received enough recovery votes, inputting cert");
+                // TODO: input symbolic cert to vaba
+            }
+        }
     }
 
     fn switch_to_steady(&mut self) {
