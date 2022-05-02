@@ -1,7 +1,7 @@
 use crate::config::{Committee, Stake};
 use crate::core::SeqNumber;
 use crate::error::{ConsensusError, ConsensusResult};
-use crate::messages::{Timeout, Vote, QC, TC, RecoveryVote};
+use crate::messages::{RecoveryVote, Timeout, Vote, QC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ pub struct Aggregator {
     committee: Committee,
     votes_aggregators: HashMap<SeqNumber, HashMap<Digest, Box<QCMaker>>>,
     timeouts_aggregators: HashMap<SeqNumber, Box<TCMaker>>,
-    recovery_votes_aggregators: HashMap<u64, Vec<RecoveryVote>>,
+    recovery_votes_aggregators: HashMap<u64, HashMap<u64, Vec<RecoveryVote>>>, // era -> index -> rv
 }
 
 impl Aggregator {
@@ -31,12 +31,19 @@ impl Aggregator {
     }
 
     pub fn add_recovery_vote(&mut self, rv: RecoveryVote) -> bool {
-        if let Some(rcs) =  self.recovery_votes_aggregators.get(&rv.era) {
-            if rcs.len() >= self.committee.quorum_threshold() as usize {
-                return true
+        if let Some(rvs_map) = self.recovery_votes_aggregators.get(&rv.era) {
+            if let Some(rvs) = rvs_map.get(&rv.index) {
+                if rvs.len() >= self.committee.quorum_threshold() as usize {
+                    return true;
+                }
             }
         }
-        self.recovery_votes_aggregators.entry(rv.era).or_insert_with(Vec::new).push(rv.clone());
+        self.recovery_votes_aggregators
+            .entry(rv.era)
+            .or_insert_with(HashMap::new)
+            .entry(rv.index)
+            .or_insert_with(Vec::new)
+            .push(rv.clone());
         false
     }
 

@@ -7,7 +7,8 @@ use crate::leader::LeaderElector;
 use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
 use crate::messages::{Block, RecoveryVote};
 use crate::synchronizer::Synchronizer;
-use crate::{MempoolWrapper, SeqNumber};
+use crate::{MempoolWrapper, SeqNumber, QC};
+use async_recursion::async_recursion;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, info};
 use std::collections::VecDeque;
@@ -42,7 +43,6 @@ pub struct OptimisticCompiler {
     era: SeqNumber,
     loopback: usize,
     l: usize,
-    k: usize,
     k_voted: usize,
     state: State,
     aggregator: Aggregator,
@@ -56,8 +56,7 @@ pub struct OptimisticCompiler {
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols
     tx_vaba: Sender<ConsensusMessage>,   // Channel for forwarding messages to sub protocols
     tx_cert: Sender<Digest>, // Used to send recovery certificates to the mempool wrapper
-    tx_stop_start: Sender<bool>, // Used to stop and start jolteon
-    blub: bool,
+    tx_stop_start: Sender<()>, // Used to stop and start jolteon
 }
 
 impl OptimisticCompiler {
@@ -178,10 +177,9 @@ impl OptimisticCompiler {
         Self {
             name,
             committee: committee.clone(),
-            era: 1,
+            era: 0,
             loopback: 10,
             l: 0,
-            k: 0,
             k_voted: 0,
             state: State::Steady,
             aggregator: Aggregator::new(committee.clone()),
@@ -196,21 +194,25 @@ impl OptimisticCompiler {
             tx_vaba,
             tx_cert,
             tx_stop_start,
-            blub: false,
         }
     }
 
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {
-            ConsensusMessage::Recovery(rv) => self.handle_recovery_vote(rv),
+            ConsensusMessage::Recovery(rv) => self.handle_recovery_vote(&rv).await,
             _ => self.forward_message(message).await,
         }
     }
 
-    fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
+    async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
         // Received block(s) from jolteon that can be appended to the
         // main chain.
-        debug!("Received block(s) from jolteon {:?}", blocks);
+        debug!(
+            "Received block(s) from jolteon {:?}. Len main {} Len vaba {}",
+            blocks,
+            self.main_chain.len(),
+            self.vaba_chain.len()
+        );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
                 info!("Committed {}", block);
@@ -224,7 +226,7 @@ impl OptimisticCompiler {
             self.main_chain.push(block);
         }
 
-        self.ss_try_resolve();
+        self.ss_try_resolve().await;
     }
 
     async fn handle_event(&mut self, event: Event) {
@@ -234,41 +236,12 @@ impl OptimisticCompiler {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
-                        if !self.blub {
-                            let b = block.clone();
-                            let recovery_vote = RecoveryVote::new(
-                                self.name,
-                                12,
-                                2,
-                                self.signature_service.clone(),
-                                b.qc,
-                                self.name,
-                            )
-                            .await;
-                            debug!("Multicasting Recovery Vote!");
-                            Synchronizer::transmit(
-                                ConsensusMessage::Recovery(recovery_vote.clone()),
-                                &self.name,
-                                None,
-                                &self.network_filter,
-                                &self.committee,
-                            )
-                            .await
-                            .unwrap();
-                            let res = self.aggregator.add_recovery_vote(recovery_vote);
-                            if res {
-                                debug!("Received enough recovery votes, inputting cert");
-                            }
-                            self.blub = true;
-                        }
-
                         self.vaba_chain.push(block);
-                        self.ss_try_resolve();
-                        self.rs_try_vote().await;
+                        self.ss_try_resolve().await;
                     }
                     _ => {
                         // Vote, Lock, Advance
-                        self.ss_try_resolve();
+                        self.ss_try_resolve().await;
                     }
                 }
             }
@@ -284,37 +257,50 @@ impl OptimisticCompiler {
         }
     }
 
-    fn handle_recovery_vote(&mut self, rv: RecoveryVote) {
+    async fn handle_recovery_vote(&mut self, rv: &RecoveryVote) {
         debug!("Received recovery vote {:?}", rv);
         if let Ok(_) = rv.verify() {
-            let res = self.aggregator.add_recovery_vote(rv);
+            let res = self.aggregator.add_recovery_vote(rv.clone());
             if res {
-                debug!("Received enough recovery votes, inputting cert");
+                debug!("Received enough recovery votes for era {}, index {}, inputting cert", rv.era, rv.index);
                 // TODO: input symbolic cert to vaba
+                let cert = self.make_recovery_cert(rv.era, rv.index);
+                //self.tx_cert.send(cert).await.unwrap();
             }
         }
     }
 
-    fn switch_to_steady(&mut self) {
-        // TODO: implement me
-        self.era += 1;
-        self.state = State::Steady;
-        self.ss_try_resolve();
-        // TODO: begin running jolteon
+    fn make_recovery_cert(&mut self, era: SeqNumber, index: SeqNumber) -> Digest {
+        let blub: [u8; 32] = [
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1,
+            1, 1, 1,
+        ];
+        Digest(blub.as_slice()[..32].try_into().unwrap())
     }
 
+    #[async_recursion]
+    async fn switch_to_steady(&mut self) {
+        debug!("Entering steady state. Era {}", self.era + 1);
+        self.era += 1;
+        self.state = State::Steady;
+        self.ss_try_resolve().await;
+        self.tx_stop_start.send(()).await.unwrap();
+    }
+
+    #[async_recursion]
     async fn switch_to_recovery(&mut self) {
-        // TODO: implement me
+        debug!("Entering recovery state");
         self.state = State::Recovery;
+        self.tx_stop_start.send(()).await.unwrap();
         self.rs_try_vote().await;
         self.rs_try_resolve().await;
     }
 
     /* Steady state functions */
 
-    fn ss_try_resolve(&mut self) {
+    async fn ss_try_resolve(&mut self) {
         if self._ss_try_resolve() {
-            // TODO: switch to recovery
+            self.switch_to_recovery().await;
         }
     }
 
@@ -328,7 +314,8 @@ impl OptimisticCompiler {
             }
             for tx in &self.vaba_chain[self.l].payload {
                 let x = tx.clone();
-                if !self.certified_on_time(x) {
+                if !self.certified_on_time(x.clone()) {
+                    debug!("Tx {} not certified in time", &x);
                     // If there is one tx not certified on time switch to recovery state
                     self.l += 1;
                     return true;
@@ -342,11 +329,8 @@ impl OptimisticCompiler {
     }
 
     fn certified_on_time(&mut self, tx: Digest) -> bool {
-        // TODO: implement me
-        // TODO: check if tx is already in fast chain. If no -> false
         for b in &self.main_chain {
             if b.payload.contains(&tx) {
-                debug!("Main chain contains {}", tx);
                 return true;
             }
         }
@@ -356,13 +340,15 @@ impl OptimisticCompiler {
             self.main_chain.len(),
             self.vaba_chain.len()
         );
-        true
+        false
     }
 
     /* Recovery state functions */
 
     async fn rs_try_resolve(&mut self) {
-        if self._rs_try_resolve().await {}
+        if self._rs_try_resolve().await {
+            self.switch_to_steady().await;
+        }
     }
 
     async fn _rs_try_resolve(&mut self) -> bool {
@@ -380,17 +366,39 @@ impl OptimisticCompiler {
     }
 
     async fn rs_try_vote(&mut self) {
-        // TODO: implement me
+        // TODO: k is something else. See first algo description
         let k = self.main_chain.len();
+        let mut recovery_votes = Vec::new();
         debug!("rsTryVote k_voted: {} k: {}", self.k_voted, k);
         for i in self.k_voted..k {
-            for b in &self.main_chain {
-                if b.qc.round == (i as u64) {
-                    //debug!("IT'S A MATCH! index: {} era: {}", i, b.qc.view);
+            for b in &mut self.main_chain {
+                if b.qc.round == (i as u64) && b.qc.view == self.era {
+                    debug!("IT'S A MATCH! index: {} era: {}", i, b.qc.view);
+                    let rv = RecoveryVote::new(
+                        self.era,
+                        b.round,
+                        self.signature_service.clone(),
+                        b.qc.clone(),
+                        self.name,
+                    )
+                    .await;
+                    recovery_votes.push(rv);
                 }
             }
         }
-        //self.k_voted = k;
+        for rv in recovery_votes {
+            Synchronizer::transmit(
+                ConsensusMessage::Recovery(rv.clone()),
+                &self.name,
+                None,
+                &self.network_filter,
+                &self.committee,
+            )
+            .await
+            .unwrap();
+            self.handle_recovery_vote(&rv).await;
+        }
+        self.k_voted = k;
     }
 
     fn handle_certificate(&mut self, tx: &Digest) {
@@ -401,7 +409,6 @@ impl OptimisticCompiler {
     }
 
     async fn forward_message(&mut self, message: ConsensusMessage) {
-        // TODO: replace unwrap with expect
         match message {
             // Messages used by jolteon
             ConsensusMessage::ProposeJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
@@ -443,7 +450,7 @@ impl OptimisticCompiler {
         loop {
             tokio::select! {
                 Some(message) = self.rx_main.recv() => self.handle_message(message).await,
-                Some(blocks) = self.rx_blocks.recv() => self.handle_blocks(blocks),
+                Some(blocks) = self.rx_blocks.recv() => self.handle_blocks(blocks).await,
                 Some(event) = self.rx_event.recv() => self.handle_event(event).await
             }
         }

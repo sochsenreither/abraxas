@@ -85,7 +85,7 @@ pub struct Core {
     tx_event: Sender<Event>,
     tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
     tx_blocks: Sender<VecDeque<Block>>,
-    rx_stop_start: Receiver<bool>,
+    rx_stop_start: Receiver<()>,
 }
 
 impl Core {
@@ -105,7 +105,7 @@ impl Core {
         tx_event: Sender<Event>,
         tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
         tx_blocks: Sender<VecDeque<Block>>,
-        rx_stop_start: Receiver<bool>,
+        rx_stop_start: Receiver<()>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
         let timer = Timer::new(parameters.timeout_delay);

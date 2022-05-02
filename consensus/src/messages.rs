@@ -668,7 +668,6 @@ impl fmt::Debug for RandomCoin {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct RecoveryVote {
-    pub sender: PublicKey,
     pub era: SeqNumber,
     pub index: SeqNumber,
     pub qc: QC,
@@ -678,7 +677,6 @@ pub struct RecoveryVote {
 
 impl RecoveryVote {
     pub async fn new(
-        sender: PublicKey,
         era: SeqNumber,
         index: SeqNumber,
         mut signature_service: SignatureService,
@@ -688,7 +686,6 @@ impl RecoveryVote {
         let qc_hash = qc.digest();
         let signature = signature_service.request_signature(qc_hash).await;
         Self {
-            sender,
             era,
             index,
             qc,
@@ -707,8 +704,8 @@ impl fmt::Debug for RecoveryVote {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "RecoveryVote(sender {}, era {}, index {}, qc {:?})",
-            self.sender, self.era, self.index, self.qc
+            "RecoveryVote(author {}, era {}, index {}, qc {:?})",
+            self.author, self.era, self.index, self.qc
         )
     }
 }
