@@ -207,8 +207,9 @@ impl OptimisticCompiler {
     async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
         // Received block(s) from jolteon that can be appended to the
         // main chain.
+        // TODO: remove txs from vaba buf?
         debug!(
-            "Received block(s) from jolteon {:?}. Len main {} Len vaba {}",
+            "Received block(s): {:?}. Len main {} Len vaba {}",
             blocks,
             self.main_chain.len(),
             self.vaba_chain.len()
@@ -231,11 +232,15 @@ impl OptimisticCompiler {
 
     async fn handle_event(&mut self, event: Event) {
         // Received an event notification by one of the two sub protocols.
-        debug!("Received event! {:?}", event);
         match self.state {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
+                        debug!(
+                            "Vaba out: Len main {} Len vaba {}",
+                            self.main_chain.len(),
+                            self.vaba_chain.len()
+                        );
                         self.vaba_chain.push(block);
                         self.ss_try_resolve().await;
                     }
@@ -247,6 +252,11 @@ impl OptimisticCompiler {
             }
             State::Recovery => match event {
                 Event::VabaOut(block) => {
+                    debug!(
+                        "Vaba out: Len main {} Len vaba {}",
+                        self.main_chain.len(),
+                        self.vaba_chain.len()
+                    );
                     self.vaba_chain.push(block);
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
@@ -258,24 +268,36 @@ impl OptimisticCompiler {
     }
 
     async fn handle_recovery_vote(&mut self, rv: &RecoveryVote) {
-        debug!("Received recovery vote {:?}", rv);
+        //debug!("Received recovery vote {:?}", rv);
         if let Ok(_) = rv.verify() {
             let res = self.aggregator.add_recovery_vote(rv.clone());
             if res {
-                debug!("Received enough recovery votes for era {}, index {}, inputting cert", rv.era, rv.index);
-                // TODO: input symbolic cert to vaba
+                // debug!(
+                //     "Received enough recovery votes for era {}, index {}, inputting cert",
+                //     rv.era, rv.index
+                // );
                 let cert = self.make_recovery_cert(rv.era, rv.index);
-                //self.tx_cert.send(cert).await.unwrap();
+                self.tx_cert.send(cert).await.unwrap();
             }
         }
     }
 
     fn make_recovery_cert(&mut self, era: SeqNumber, index: SeqNumber) -> Digest {
-        let blub: [u8; 32] = [
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1,
-            1, 1, 1,
-        ];
-        Digest(blub.as_slice()[..32].try_into().unwrap())
+        // let era_bytes = era.to_be_bytes().as_slice();
+        // let index_bytes = index.to_be_bytes().as_slice();
+        let cert_prefix: &[u8] = [2; 16].as_slice();
+        let cert = [
+            cert_prefix,
+            era.to_be_bytes().as_slice(),
+            index.to_be_bytes().as_slice(),
+        ]
+        .concat();
+        let ret = Digest(cert.as_slice()[..32].try_into().unwrap());
+        // debug!(
+        //     "Created certificate for e: {}, i: {} -> {:?}",
+        //     era, index, ret
+        // );
+        ret
     }
 
     #[async_recursion]
@@ -313,9 +335,16 @@ impl OptimisticCompiler {
                 return self._ss_try_resolve();
             }
             for tx in &self.vaba_chain[self.l].payload {
+                // Ignore recovery certificates
+                if OptimisticCompiler::is_certificate(tx.to_vec()) {
+                    continue;
+                }
                 let x = tx.clone();
                 if !self.certified_on_time(x.clone()) {
-                    debug!("Tx {} not certified in time", &x);
+                    debug!(
+                        "Tx {} not certified in time in block {:?}",
+                        &x, &self.vaba_chain[self.l]
+                    );
                     // If there is one tx not certified on time switch to recovery state
                     self.l += 1;
                     return true;
@@ -346,23 +375,46 @@ impl OptimisticCompiler {
     /* Recovery state functions */
 
     async fn rs_try_resolve(&mut self) {
-        if self._rs_try_resolve().await {
+        if self._rs_try_resolve() {
             self.switch_to_steady().await;
         }
     }
 
-    async fn _rs_try_resolve(&mut self) -> bool {
+    fn _rs_try_resolve(&mut self) -> bool {
         // TODO: implement me
-        if self.vaba_chain.len() < self.l {
+        if self.vaba_chain.len() <= self.l {
             return false;
         }
+        for tx in &self.vaba_chain[self.l].payload {
+            debug!("Tx in l {}: {:?}", self.l, tx);
+            // Check if tx is a certificate
+            if OptimisticCompiler::is_certificate(tx.to_vec()) {
+                // TODO: check of qc
+                let era = u64::from_be_bytes(tx.to_vec()[16..24].try_into().unwrap());
+                if era != self.era {
+                    self.l += 1;
+                    return self._rs_try_resolve();
+                }
+                let index = u64::from_be_bytes(tx.to_vec()[24..32].try_into().unwrap());
+                debug!(
+                    "Got a cert with e: {}, i: {}, cert: {:?}",
+                    era,
+                    index,
+                    tx.to_vec()
+                );
+                // Set blocks , increment l and return true
+                self.l += 1;
+                return true;
+            }
+        }
+        self.l += 1;
+        return self._rs_try_resolve();
         // if there is no rc in vaba[l]:
         //      l++
         //      return rsTryResolve(l)
         // if there is no qc for every k <= rc.index:
         //      return false
         // if we are here set blocks to main chain, l++ and return true
-        false
     }
 
     async fn rs_try_vote(&mut self) {
@@ -373,7 +425,7 @@ impl OptimisticCompiler {
         for i in self.k_voted..k {
             for b in &mut self.main_chain {
                 if b.qc.round == (i as u64) && b.qc.view == self.era {
-                    debug!("IT'S A MATCH! index: {} era: {}", i, b.qc.view);
+                    // debug!("IT'S A MATCH! index: {} era: {}", i, b.qc.view);
                     let rv = RecoveryVote::new(
                         self.era,
                         b.round,
@@ -401,11 +453,13 @@ impl OptimisticCompiler {
         self.k_voted = k;
     }
 
-    fn handle_certificate(&mut self, tx: &Digest) {
-        let p = tx.to_vec();
-        if p[0] == 2 && p[1] == 2 && p[2] == 2 && p[3] == 2 {
-            debug!("Recoverycert! {:?}", tx);
+    fn is_certificate(digest: Vec<u8>) -> bool {
+        for i in 0..16 {
+            if digest[i] != 2 {
+                return false;
+            }
         }
+        true
     }
 
     async fn forward_message(&mut self, message: ConsensusMessage) {
