@@ -429,34 +429,52 @@ impl OptimisticCompiler {
         }
         self.l += 1;
         return self._rs_try_resolve().await;
-        // if there is no rc in vaba[l]:
-        //      l++
-        //      return rsTryResolve(l)
-        // if there is no qc for every k <= rc.index:
-        //      return false
-        // if we are here set blocks to main chain, l++ and return true
     }
 
     async fn rs_try_vote(&mut self) {
+        debug!("rs_try_vote: k_voted: {} len vaba: {}", self.k_voted, self.vaba_chain.len());
         let mut recovery_votes = Vec::new();
-        for (i, b) in &mut self.vaba_chain.iter().enumerate() {
-            // TODO: check this, seems sketchy
-            if b.qc.view != self.era {
+        let mut set = false;
+        for i in self.k_voted..self.vaba_chain.len() {
+            if self.vaba_chain[i].qc.view > self.era {
                 self.k_voted = i - 1;
+                set = true;
+                break;
             }
-            if b.qc.round == (i as u64) {
-                debug!("IT'S A MATCH! era: {} index: {}", b.qc.view, i);
+            if self.vaba_chain[i].qc.view == self.era {
+                debug!("IT'S A MATCH! era: {} index: {}", self.vaba_chain[i].qc.view, self.vaba_chain[i].qc.round);
                 let rv = RecoveryVote::new(
                     self.era,
-                    b.round,
+                    self.vaba_chain[i].round,
                     self.signature_service.clone(),
-                    b.qc.clone(),
+                    self.vaba_chain[i].qc.clone(),
                     self.name,
                 )
                 .await;
                 recovery_votes.push(rv);
             }
         }
+        if !set {
+            self.k_voted = self.vaba_chain.len();
+        }
+        // for (i, b) in &mut self.vaba_chain.iter().enumerate() {
+        //     // TODO: check this, seems sketchy
+        //     if b.qc.view > self.era {
+        //         self.k_voted = i - 1;
+        //     }
+        //     if b.qc.round == (i as u64) {
+        //         debug!("IT'S A MATCH! era: {} index: {}", b.qc.view, i);
+        //         let rv = RecoveryVote::new(
+        //             self.era,
+        //             b.round,
+        //             self.signature_service.clone(),
+        //             b.qc.clone(),
+        //             self.name,
+        //         )
+        //         .await;
+        //         recovery_votes.push(rv);
+        //     }
+        // }
 
         for rv in recovery_votes {
             Synchronizer::transmit(
