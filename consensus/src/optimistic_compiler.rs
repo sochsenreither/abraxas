@@ -56,7 +56,8 @@ pub struct OptimisticCompiler {
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols
     tx_vaba: Sender<ConsensusMessage>,   // Channel for forwarding messages to sub protocols
     tx_cert: Sender<Digest>, // Used to send recovery certificates to the mempool wrapper
-    tx_stop_start: Sender<()>, // Used to stop and start jolteon
+    tx_remove: Sender<Vec<Digest>>, // Used to send signal the mempool wrapper which transactions can be removed
+    tx_stop_start: Sender<()>,      // Used to stop and start jolteon
 }
 
 impl OptimisticCompiler {
@@ -88,8 +89,14 @@ impl OptimisticCompiler {
         let (tx_wrapper, rx_wrapper) = channel(1_000);
         let max_payload_size = parameters.clone().max_payload_size;
         let (tx_cert, rx_cert) = channel(1_000);
-        let mut mempool_wrapper =
-            MempoolWrapper::new(max_payload_size, mempool_driver, rx_wrapper, rx_cert);
+        let (tx_remove, rx_remove) = channel(1_000);
+        let mut mempool_wrapper = MempoolWrapper::new(
+            max_payload_size,
+            mempool_driver,
+            rx_wrapper,
+            rx_cert,
+            rx_remove,
+        );
         tokio::spawn(async move {
             mempool_wrapper.run().await;
         });
@@ -191,6 +198,7 @@ impl OptimisticCompiler {
             tx_jolteon,
             tx_vaba,
             tx_cert,
+            tx_remove,
             tx_stop_start,
         }
     }
@@ -203,8 +211,7 @@ impl OptimisticCompiler {
     }
 
     async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
-        // Received block(s) from jolteon that can be appended to the
-        // main chain.
+        // Received block(s) from jolteon that can be appended to the main chain.
         // TODO: remove txs from vaba buf
         debug!(
             "Received block(s): {:?}. Len main {} Len vaba {}",
@@ -214,10 +221,14 @@ impl OptimisticCompiler {
         );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
+                self.tx_remove.send(block.payload.clone()).await.unwrap();
                 info!("Committed {}", block);
 
                 #[cfg(feature = "benchmark")]
                 for x in &block.payload {
+                    if OptimisticCompiler::is_certificate(x.to_vec()) {
+                        continue;
+                    }
                     // NOTE: This log entry is used to compute performance.
                     info!("Committed TX({})", base64::encode(x));
                 }

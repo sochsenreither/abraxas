@@ -16,6 +16,7 @@ pub struct MempoolWrapper {
     mempool_driver: MempoolDriver,
     rx_request: Receiver<(oneshot::Sender<Vec<Digest>>, SubProto)>,
     rx_cert: Receiver<Digest>,
+    rx_remove: Receiver<Vec<Digest>>,
 }
 
 impl MempoolWrapper {
@@ -24,6 +25,7 @@ impl MempoolWrapper {
         mempool_driver: MempoolDriver,
         rx_request: Receiver<(oneshot::Sender<Vec<Digest>>, SubProto)>,
         rx_cert: Receiver<Digest>,
+        rx_remove: Receiver<Vec<Digest>>,
     ) -> Self {
         Self {
             buffer_jolteon: HashSet::new(),
@@ -35,9 +37,11 @@ impl MempoolWrapper {
             mempool_driver,
             rx_request,
             rx_cert,
+            rx_remove,
         }
     }
 
+    // Logs incoming transactions
     fn log_data(&mut self, data: &Vec<Digest>, proto: SubProto) {
         for d in data {
             // NOTE: This log entry is used to compute performance.
@@ -53,6 +57,8 @@ impl MempoolWrapper {
         );
     }
 
+    // Handles transaction requests from the sub protocols. If there aren't any transactions already in the buffers
+    // the mempool will be asked for transactions.
     async fn handle_request(&mut self, answer: oneshot::Sender<Vec<Digest>>, proto: SubProto) {
         let digests = match proto {
             SubProto::Jolteon => {
@@ -73,7 +79,7 @@ impl MempoolWrapper {
                 digests
             }
             SubProto::Vaba => {
-                // If there are recovery certificates in the buffer use them as input
+                // If there are recovery certificates in the buffer, prioritize them as input
                 if self.buffer_vaba.len() + self.buffer_rc.len() < self.payload_amount {
                     let payload_to_get = self.max
                         - (self.buffer_vaba.len() * self.digest_len)
@@ -106,19 +112,24 @@ impl MempoolWrapper {
         answer.send(digests).expect("Failed to send");
     }
 
+    fn add_certificate(&mut self, cert: Digest) {
+        self.buffer_rc.insert(cert.clone());
+    }
+
+    fn remove_tx(&mut self, txs: Vec<Digest>) {
+        debug!("Removing txs {:?}", &txs);
+        for tx in txs {
+            self.buffer_jolteon.remove(&tx);
+            self.buffer_vaba.remove(&tx);
+        }
+    }
+
     pub async fn run(&mut self) {
-        // let blub: [u8; 32] = [
-        //     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1,
-        //     1, 1, 1,
-        // ];
-        // let test = Digest(blub.as_slice()[..32].try_into().unwrap());
         loop {
             tokio::select! {
-                Some(rc) = self.rx_cert.recv() => {
-                    self.buffer_rc.insert(rc.clone());
-                    info!("Incoming TX({})", base64::encode(rc));
-                },
-                Some((answer, proto)) = self.rx_request.recv() => self.handle_request(answer, proto).await
+                Some(cert) = self.rx_cert.recv() =>  self.add_certificate(cert),
+                Some((answer, proto)) = self.rx_request.recv() => self.handle_request(answer, proto).await,
+                Some(txs) = self.rx_remove.recv() => self.remove_tx(txs),
             }
         }
     }
