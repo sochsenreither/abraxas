@@ -587,10 +587,7 @@ impl Core {
                     }
                 },
                 Some(_) = self.rx_stop_start.recv() => self.handle_stop_start().await,
-                () = &mut self.timer => {
-                    // self.local_timeout_round().await
-                    Ok(())
-                },
+                () = &mut self.timer => Ok(()),
                 else => break,
             };
             match result {

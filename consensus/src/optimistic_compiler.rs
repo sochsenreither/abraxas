@@ -164,13 +164,11 @@ impl OptimisticCompiler {
 
         // Run vaba
         tokio::spawn(async move {
-            debug!("Starting vaba");
             vaba.run().await;
         });
 
         // Run jolteon
         tokio::spawn(async move {
-            debug!("Starting jolteon");
             jolteon.run().await;
         });
 
@@ -207,7 +205,7 @@ impl OptimisticCompiler {
     async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
         // Received block(s) from jolteon that can be appended to the
         // main chain.
-        // TODO: remove txs from vaba buf?
+        // TODO: remove txs from vaba buf
         debug!(
             "Received block(s): {:?}. Len main {} Len vaba {}",
             blocks,
@@ -283,8 +281,7 @@ impl OptimisticCompiler {
     }
 
     fn make_recovery_cert(&mut self, era: SeqNumber, index: SeqNumber) -> Digest {
-        // let era_bytes = era.to_be_bytes().as_slice();
-        // let index_bytes = index.to_be_bytes().as_slice();
+        // TODO: use real threshold certificates
         let cert_prefix: &[u8] = [2; 16].as_slice();
         let cert = [
             cert_prefix,
@@ -292,12 +289,11 @@ impl OptimisticCompiler {
             index.to_be_bytes().as_slice(),
         ]
         .concat();
-        let ret = Digest(cert.as_slice()[..32].try_into().unwrap());
+        Digest(cert.as_slice()[..32].try_into().unwrap())
         // debug!(
         //     "Created certificate for e: {}, i: {} -> {:?}",
         //     era, index, ret
         // );
-        ret
     }
 
     #[async_recursion]
@@ -341,10 +337,10 @@ impl OptimisticCompiler {
                 }
                 let x = tx.clone();
                 if !self.certified_on_time(x.clone()) {
-                    debug!(
-                        "Tx {} not certified in time in block {:?}",
-                        &x, &self.vaba_chain[self.l]
-                    );
+                    // debug!(
+                    //     "Tx {} not certified in time in block {:?}",
+                    //     &x, &self.vaba_chain[self.l]
+                    // );
                     // If there is one tx not certified on time switch to recovery state
                     self.l += 1;
                     return true;
@@ -358,7 +354,6 @@ impl OptimisticCompiler {
     }
 
     fn certified_on_time(&mut self, tx: Digest) -> bool {
-        debug!("Testing for certified on time");
         for b in &self.main_chain {
             if b.payload.contains(&tx) {
                 return true;
@@ -383,14 +378,13 @@ impl OptimisticCompiler {
 
     #[async_recursion]
     async fn _rs_try_resolve(&mut self) -> bool {
-        // TODO: implement me
         if self.vaba_chain.len() <= self.l {
             return false;
         }
         for tx in self.vaba_chain[self.l].clone().payload {
             // Check if tx is a certificate
             if OptimisticCompiler::is_certificate(tx.to_vec()) {
-                // TODO: check of qc
+                // TODO: check of qc necessary? This should be a guarantee of vaba
                 let era = u64::from_be_bytes(tx.to_vec()[16..24].try_into().unwrap());
                 let index = u64::from_be_bytes(tx.to_vec()[24..32].try_into().unwrap());
                 if era != self.era {
@@ -409,7 +403,7 @@ impl OptimisticCompiler {
                     index,
                     tx.to_vec()
                 );
-                // Set blocks , increment l and return true
+                // Set blocks, increment l and return true
                 if self.main_chain.len() < self.vaba_chain.len() {
                     let mut queue = VecDeque::new();
                     for i in self.main_chain.len()..self.vaba_chain.len() {
@@ -432,9 +426,14 @@ impl OptimisticCompiler {
     }
 
     async fn rs_try_vote(&mut self) {
-        debug!("rs_try_vote: k_voted: {} len vaba: {}", self.k_voted, self.vaba_chain.len());
+        debug!(
+            "rs_try_vote: k_voted: {} len vaba: {}",
+            self.k_voted,
+            self.vaba_chain.len()
+        );
         let mut recovery_votes = Vec::new();
         let mut set = false;
+        // Check for qualified QCs
         for i in self.k_voted..self.vaba_chain.len() {
             if self.vaba_chain[i].qc.view > self.era {
                 self.k_voted = i - 1;
@@ -442,7 +441,10 @@ impl OptimisticCompiler {
                 break;
             }
             if self.vaba_chain[i].qc.view == self.era {
-                debug!("IT'S A MATCH! era: {} index: {}", self.vaba_chain[i].qc.view, self.vaba_chain[i].qc.round);
+                debug!(
+                    "Matching qc found! era: {} index: {}",
+                    self.vaba_chain[i].qc.view, self.vaba_chain[i].qc.round
+                );
                 let rv = RecoveryVote::new(
                     self.era,
                     self.vaba_chain[i].round,
@@ -457,25 +459,8 @@ impl OptimisticCompiler {
         if !set {
             self.k_voted = self.vaba_chain.len();
         }
-        // for (i, b) in &mut self.vaba_chain.iter().enumerate() {
-        //     // TODO: check this, seems sketchy
-        //     if b.qc.view > self.era {
-        //         self.k_voted = i - 1;
-        //     }
-        //     if b.qc.round == (i as u64) {
-        //         debug!("IT'S A MATCH! era: {} index: {}", b.qc.view, i);
-        //         let rv = RecoveryVote::new(
-        //             self.era,
-        //             b.round,
-        //             self.signature_service.clone(),
-        //             b.qc.clone(),
-        //             self.name,
-        //         )
-        //         .await;
-        //         recovery_votes.push(rv);
-        //     }
-        // }
 
+        // Send recovery votes
         for rv in recovery_votes {
             Synchronizer::transmit(
                 ConsensusMessage::Recovery(rv.clone()),
@@ -516,7 +501,7 @@ impl OptimisticCompiler {
             }
             ConsensusMessage::SyncReplyJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
 
-            // TODO: THIS CURRENTLY GETS IGNORED
+            // TODO: This currently gets ignored
             ConsensusMessage::LoopBack(_) => {
                 //tx_jolteon.send(message).await.unwrap()
                 //tx_vaba.send(message).await.unwrap()
