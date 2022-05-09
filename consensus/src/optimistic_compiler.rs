@@ -178,7 +178,7 @@ impl OptimisticCompiler {
             name,
             committee: committee.clone(),
             era: 0,
-            loopback: 1,
+            loopback: 10,
             l: 0,
             k_voted: 0,
             state: State::Steady,

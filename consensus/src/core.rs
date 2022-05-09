@@ -221,7 +221,6 @@ impl Core {
     }
 
     async fn local_timeout_round(&mut self) -> ConsensusResult<()> {
-        return Ok(());
         warn!("Timeout reached for round {}", self.round);
         self.increase_last_voted_round(self.round);
         let timeout = Timeout::new(
@@ -551,7 +550,7 @@ impl Core {
         self.rx_stop_start.recv().await;
         debug!("Starting again-----------------------------------------------------");
         // TODO: maybe reset timer?
-        Ok(())
+        self.local_timeout_round().await
     }
 
     pub async fn run(&mut self) {
@@ -588,7 +587,10 @@ impl Core {
                     }
                 },
                 Some(_) = self.rx_stop_start.recv() => self.handle_stop_start().await,
-                () = &mut self.timer => self.local_timeout_round().await,
+                () = &mut self.timer => {
+                    // self.local_timeout_round().await
+                    Ok(())
+                },
                 else => break,
             };
             match result {
