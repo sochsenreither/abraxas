@@ -1,6 +1,7 @@
 use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters};
 use crate::core::{ConsensusMessage, Core};
+use crate::error::ConsensusResult;
 use crate::fallback::Fallback;
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
@@ -10,11 +11,12 @@ use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
 use crypto::{Digest, PublicKey, SignatureService};
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use store::Store;
 use threshold_crypto::PublicKeySet;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Debug)]
@@ -206,7 +208,11 @@ impl OptimisticCompiler {
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {
             ConsensusMessage::Recovery(rv) => self.handle_recovery_vote(&rv).await,
-            _ => self.forward_message(message).await,
+            _ => {
+                self.forward_message(message)
+                    .await
+                    .expect("Failed to forward message to sub protocol");
+            }
         }
     }
 
@@ -221,7 +227,10 @@ impl OptimisticCompiler {
         );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
-                self.tx_remove.send(block.payload.clone()).await.unwrap();
+                self.tx_remove
+                    .send(block.payload.clone())
+                    .await
+                    .expect("Failed to send transactions to mempool wrapper");
                 info!("Committed {}", block);
 
                 #[cfg(feature = "benchmark")]
@@ -286,7 +295,10 @@ impl OptimisticCompiler {
                     rv.era, rv.index
                 );
                 let cert = self.make_recovery_cert(rv.era, rv.index);
-                self.tx_cert.send(cert).await.unwrap();
+                self.tx_cert
+                    .send(cert)
+                    .await
+                    .expect("Failed to send certificate to mempool wrapper");
             }
         }
     }
@@ -313,14 +325,14 @@ impl OptimisticCompiler {
         self.era += 1;
         self.state = State::Steady;
         self.ss_try_resolve().await;
-        self.tx_stop_start.send(()).await.unwrap();
+        self.tx_stop_start.send(()).await.expect("Failed to start jolteon");
     }
 
     #[async_recursion]
     async fn switch_to_recovery(&mut self) {
         debug!("Entering recovery state");
         self.state = State::Recovery;
-        self.tx_stop_start.send(()).await.unwrap();
+        self.tx_stop_start.send(()).await.expect("Failed to stop jolteon");
         self.rs_try_vote().await;
         self.rs_try_resolve().await;
     }
@@ -473,7 +485,7 @@ impl OptimisticCompiler {
 
         // Send recovery votes
         for rv in recovery_votes {
-            Synchronizer::transmit(
+            match Synchronizer::transmit(
                 ConsensusMessage::Recovery(rv.clone()),
                 &self.name,
                 None,
@@ -481,7 +493,10 @@ impl OptimisticCompiler {
                 &self.committee,
             )
             .await
-            .unwrap();
+            {
+                Ok(_) => (),
+                Err(e) => warn!("{}", e),
+            };
             self.handle_recovery_vote(&rv).await;
         }
     }
@@ -495,41 +510,44 @@ impl OptimisticCompiler {
         true
     }
 
-    async fn forward_message(&mut self, message: ConsensusMessage) {
+    async fn forward_message(
+        &mut self,
+        message: ConsensusMessage,
+    ) -> Result<(), SendError<ConsensusMessage>> {
         match message {
             // Messages used by jolteon
-            ConsensusMessage::ProposeJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::VoteJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::TimeoutJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::TCJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::SignedQCJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::RandomnessShareJolteon(_) => {
-                self.tx_jolteon.send(message).await.unwrap()
-            }
-            ConsensusMessage::RandomCoinJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
-            ConsensusMessage::SyncRequestJolteon(_, _) => {
-                self.tx_jolteon.send(message).await.unwrap()
-            }
-            ConsensusMessage::SyncReplyJolteon(_) => self.tx_jolteon.send(message).await.unwrap(),
+            ConsensusMessage::ProposeJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::VoteJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::TimeoutJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::TCJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::SignedQCJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::RandomnessShareJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::RandomCoinJolteon(_) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::SyncRequestJolteon(_, _) => self.tx_jolteon.send(message).await,
+            ConsensusMessage::SyncReplyJolteon(_) => self.tx_jolteon.send(message).await,
 
             // TODO: This currently gets ignored
             ConsensusMessage::LoopBack(_) => {
                 //tx_jolteon.send(message).await.unwrap()
                 //tx_vaba.send(message).await.unwrap()
+                Ok(())
             }
 
             // Messages used by vaba
-            ConsensusMessage::ProposeVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::VoteVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::TimeoutVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::TCVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::SignedQCVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::RandomnessShareVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::RandomCoinVaba(_) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::SyncRequestVaba(_, _) => self.tx_vaba.send(message).await.unwrap(),
-            ConsensusMessage::SyncReplyVaba(_) => self.tx_vaba.send(message).await.unwrap(),
+            ConsensusMessage::ProposeVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::VoteVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::TimeoutVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::TCVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::SignedQCVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::RandomnessShareVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::RandomCoinVaba(_) => self.tx_vaba.send(message).await,
+            ConsensusMessage::SyncRequestVaba(_, _) => self.tx_vaba.send(message).await,
+            ConsensusMessage::SyncReplyVaba(_) => self.tx_vaba.send(message).await,
 
-            _ => debug!("Wrong message type {:?}", message),
+            _ => {
+                debug!("Wrong message type {:?}", message);
+                Ok(())
+            }
         }
     }
 
