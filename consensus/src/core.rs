@@ -187,7 +187,10 @@ impl Core {
             parent = ancestor;
         }
         // Send the block that can be committed to the main protocol.
-        self.tx_blocks.send(to_commit.clone()).await.unwrap();
+        self.tx_blocks
+            .send(to_commit.clone())
+            .await
+            .expect("Failed to send blocks to the main protocol");
 
         // Save the last committed block.
         self.last_committed_round = block.round;
@@ -310,7 +313,10 @@ impl Core {
     #[async_recursion]
     async fn advance_round(&mut self, round: SeqNumber) {
         // ADVANCE
-        self.tx_event.send(Event::Advance).await.unwrap();
+        self.tx_event
+            .send(Event::Advance)
+            .await
+            .expect("Failed to send event");
         if round < self.round {
             return;
         }
@@ -386,7 +392,10 @@ impl Core {
     async fn process_qc(&mut self, qc: &QC) {
         self.advance_round(qc.round).await;
         // LOCK
-        self.tx_event.send(Event::Lock).await.unwrap();
+        self.tx_event
+            .send(Event::Lock)
+            .await
+            .expect("Failed to send event");
         self.update_high_qc(qc);
     }
 
@@ -469,7 +478,10 @@ impl Core {
 
     async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         // VOTE
-        self.tx_event.send(Event::Vote).await.unwrap();
+        self.tx_event
+            .send(Event::Vote)
+            .await
+            .expect("Failed to send event");
         let digest = block.digest();
 
         // Ensure the block proposer is the right leader for the round.
