@@ -558,10 +558,7 @@ impl Core {
     }
 
     async fn handle_stop_start(&mut self) -> ConsensusResult<()> {
-        debug!("Received stop------------------------------------------------------");
         self.rx_stop_start.recv().await;
-        debug!("Starting again-----------------------------------------------------");
-        // TODO: maybe reset timer?
         self.local_timeout_round().await
     }
 

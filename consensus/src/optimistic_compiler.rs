@@ -217,8 +217,7 @@ impl OptimisticCompiler {
     }
 
     async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
-        // Received block(s) from jolteon that can be appended to the main chain.
-        // TODO: remove txs from vaba buf
+        // Received block(s) that can be appended to the main chain.
         debug!(
             "Received block(s): {:?}. Len main {} Len vaba {}",
             blocks,
@@ -325,14 +324,20 @@ impl OptimisticCompiler {
         self.era += 1;
         self.state = State::Steady;
         self.ss_try_resolve().await;
-        self.tx_stop_start.send(()).await.expect("Failed to start jolteon");
+        self.tx_stop_start
+            .send(())
+            .await
+            .expect("Failed to start jolteon");
     }
 
     #[async_recursion]
     async fn switch_to_recovery(&mut self) {
         debug!("Entering recovery state");
         self.state = State::Recovery;
-        self.tx_stop_start.send(()).await.expect("Failed to stop jolteon");
+        self.tx_stop_start
+            .send(())
+            .await
+            .expect("Failed to stop jolteon");
         self.rs_try_vote().await;
         self.rs_try_resolve().await;
     }
@@ -455,12 +460,9 @@ impl OptimisticCompiler {
             self.vaba_chain.len()
         );
         let mut recovery_votes = Vec::new();
-        let mut set = false;
-        // Check for qualified QCs
         for i in self.k_voted..self.vaba_chain.len() {
+            self.k_voted = i - 1;
             if self.vaba_chain[i].qc.view > self.era {
-                self.k_voted = i - 1;
-                set = true;
                 break;
             }
             if self.vaba_chain[i].qc.view == self.era {
@@ -478,9 +480,6 @@ impl OptimisticCompiler {
                 .await;
                 recovery_votes.push(rv);
             }
-        }
-        if !set {
-            self.k_voted = self.vaba_chain.len();
         }
 
         // Send recovery votes
@@ -545,7 +544,7 @@ impl OptimisticCompiler {
             ConsensusMessage::SyncReplyVaba(_) => self.tx_vaba.send(message).await,
 
             _ => {
-                debug!("Wrong message type {:?}", message);
+                warn!("Wrong message type {:?}", message);
                 Ok(())
             }
         }
