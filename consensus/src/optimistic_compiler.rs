@@ -180,8 +180,6 @@ impl OptimisticCompiler {
             jolteon.run().await;
         });
 
-        info!("Random ddos {}", parameters.random_ddos);
-
         Self {
             name,
             committee: committee.clone(),
