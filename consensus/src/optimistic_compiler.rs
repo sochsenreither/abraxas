@@ -1,7 +1,6 @@
 use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters};
 use crate::core::{ConsensusMessage, Core};
-use crate::error::ConsensusResult;
 use crate::fallback::Fallback;
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
@@ -10,7 +9,7 @@ use crate::messages::{Block, RecoveryVote};
 use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
-use crypto::{Digest, PublicKey, SignatureService};
+use crypto::{Digest, PublicKey, SignatureService, Hash};
 use log::{debug, info, warn};
 use std::collections::VecDeque;
 use std::convert::TryInto;
@@ -181,6 +180,8 @@ impl OptimisticCompiler {
             jolteon.run().await;
         });
 
+        info!("Random ddos {}", parameters.random_ddos);
+
         Self {
             name,
             committee: committee.clone(),
@@ -204,6 +205,12 @@ impl OptimisticCompiler {
             tx_stop_start,
         }
     }
+
+    // async fn store_block(&mut self, block: &Block) {
+    //     let key = block.digest().to_vec();
+    //     let value = bincode::serialize(block).expect("Failed to serialize block");
+    //     self.store.write(key, value).await;
+    // }
 
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {

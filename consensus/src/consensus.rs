@@ -1,4 +1,4 @@
-use crate::config::{Committee, Parameters, Protocol};
+use crate::config::{Committee, Parameters};
 use crate::core::ConsensusMessage;
 use crate::error::ConsensusResult;
 use crate::filter::Filter;
@@ -31,7 +31,6 @@ impl Consensus {
         rx_core: Receiver<ConsensusMessage>,
         tx_consensus_mempool: Sender<ConsensusMempoolMessage>,
         tx_commit: Sender<Block>,
-        _protocol: Protocol,
     ) -> ConsensusResult<()> {
         info!(
             "Consensus timeout delay set to {} ms",
@@ -71,18 +70,6 @@ impl Consensus {
         // Custom filter to arbitrary delay network messages.
         Filter::run(rx_filter, tx_network, parameters.clone());
 
-        // Make the synchronizer. This instance runs in a background thread
-        // and asks other nodes for any block that we may be missing.
-        // let synchronizer = Synchronizer::new(
-        //     name,
-        //     committee.clone(),
-        //     store.clone(),
-        //     /* network_filter */ tx_filter.clone(),
-        //     /* core_channel */ tx_core,
-        //     parameters.sync_retry_delay,
-        // )
-        // .await;
-
         let mut optimistic_compiler = OptimisticCompiler::new(
             name,
             committee,
@@ -99,73 +86,6 @@ impl Consensus {
         .await;
 
         optimistic_compiler.run().await;
-
-        // match protocol {
-        //     Protocol::HotStuff => {
-        //         // Run HotStuff
-        //         let mut core = Core::new(
-        //             name,
-        //             committee,
-        //             parameters,
-        //             signature_service,
-        //             store,
-        //             leader_elector,
-        //             mempool_driver,
-        //             synchronizer,
-        //             /* core_channel */ rx_core,
-        //             /* network_filter */ tx_filter,
-        //             /* commit_channel */ tx_commit,
-        //         );
-        //         tokio::spawn(async move {
-        //             core.run().await;
-        //         });
-        //     }
-        //     Protocol::AsyncHotStuff => {
-        //         // Run AsyncHotStuff
-        //         let mut hotstuff_with_fallback = Fallback::new(
-        //             name,
-        //             committee,
-        //             parameters,
-        //             signature_service,
-        //             pk_set,
-        //             store,
-        //             leader_elector,
-        //             mempool_driver,
-        //             synchronizer,
-        //             /* core_channel */ rx_core,
-        //             /* network_filter */ tx_filter,
-        //             /* commit_channel */ tx_commit,
-        //             false,
-        //         );
-        //         tokio::spawn(async move {
-        //             hotstuff_with_fallback.run().await;
-        //         });
-        //     }
-        //     Protocol::TwoChainVABA => {
-        //         // Run TwoChainVABA, which is just fallback with timeout=0, i.e., immediately send timeout after exiting a fallback
-        //         let mut vaba = Fallback::new(
-        //             name,
-        //             committee,
-        //             parameters,
-        //             signature_service,
-        //             pk_set,
-        //             store,
-        //             leader_elector,
-        //             mempool_driver,
-        //             synchronizer,
-        //             /* core_channel */ rx_core,
-        //             /* network_filter */ tx_filter,
-        //             /* commit_channel */ tx_commit,
-        //             true, // running vaba
-        //         );
-        //         tokio::spawn(async move {
-        //             vaba.run().await;
-        //         });
-        //     }
-        //     _ => {
-        //         return Ok(());
-        //     }
-        // }
 
         Ok(())
     }

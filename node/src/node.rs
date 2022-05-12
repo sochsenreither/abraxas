@@ -1,8 +1,8 @@
 use crate::config::Export as _;
 use crate::config::{Committee, Parameters, Secret};
-use consensus::{Block, Consensus, ConsensusError, Protocol};
+use consensus::{Block, Consensus, ConsensusError};
 use crypto::{SecretShare, SignatureService};
-use log::{info, warn};
+use log::info;
 use mempool::{Mempool, MempoolError};
 use store::{Store, StoreError};
 use thiserror::Error;
@@ -66,16 +66,6 @@ impl Node {
         let signature_service =
             SignatureService::new(secret_key, Some(tss_keys.secret.into_inner()));
 
-        let protocol = match parameters.protocol {
-            0 => Protocol::HotStuff,
-            1 => Protocol::AsyncHotStuff,
-            2 => Protocol::TwoChainVABA,
-            _ => {
-                warn!("Undefined protocol type!");
-                Protocol::Others
-            }
-        };
-
         // Make a new mempool.
         Mempool::run(
             name,
@@ -99,7 +89,6 @@ impl Node {
             rx_consensus,
             tx_consensus_mempool,
             tx_commit,
-            protocol,
         )
         .await?;
 

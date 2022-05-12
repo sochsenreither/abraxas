@@ -169,7 +169,8 @@ class Bench:
             tss_keys += [TSSKey.from_file(PathMaker.threshold_key_file(i))]
         ids = [x.id for x in tss_keys]
         mempool_addr = [f'{x}:{self.settings.mempool_port}' for x in hosts]
-        committee = Committee(names, ids, consensus_addr, front_addr, mempool_addr)
+        committee = Committee(names, ids, consensus_addr,
+                              front_addr, mempool_addr)
         committee.print(PathMaker.committee_file())
 
         node_parameters.print(PathMaker.parameters_file())
@@ -224,7 +225,8 @@ class Bench:
         key_files = [PathMaker.key_file(i) for i in range(len(hosts))]
         dbs = [PathMaker.db_path(i) for i in range(len(hosts))]
         node_logs = [PathMaker.node_log_file(i) for i in range(len(hosts))]
-        threshold_key_files = [PathMaker.threshold_key_file(i) for i in range(len(hosts))]
+        threshold_key_files = [PathMaker.threshold_key_file(
+            i) for i in range(len(hosts))]
         for host, key_file, threshold_key_file, db, log_file in zip(hosts, key_files, threshold_key_files, dbs, node_logs):
             cmd = CommandMaker.run_node(
                 key_file,
@@ -246,7 +248,7 @@ class Bench:
             sleep(ceil(duration / 100))
         self.kill(hosts=hosts, delete_logs=False)
 
-    def _logs(self, hosts, faults, protocol, ddos):
+    def _logs(self, hosts, faults, ddos, random_ddos):
         # Delete local logs (if any).
         cmd = CommandMaker.clean_logs()
         subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
@@ -262,7 +264,7 @@ class Bench:
 
         # Parse logs and return the parser.
         Print.info('Parsing logs and computing performance...')
-        return LogParser.process(PathMaker.logs_path(), faults=faults, protocol=protocol, ddos=ddos)
+        return LogParser.process(PathMaker.logs_path(), faults=faults, ddos=ddos, random_ddos=random_ddos)
 
     def run(self, bench_parameters_dict, node_parameters_dict, debug=False):
         assert isinstance(debug, bool)
@@ -286,19 +288,15 @@ class Bench:
             e = FabricError(e) if isinstance(e, GroupException) else e
             raise BenchError('Failed to update nodes', e)
 
-        if node_parameters.protocol == 0:
-            Print.info('Running HotStuff')
-        elif node_parameters.protocol == 1:
-            Print.info('Running AsyncHotStuff')
-        elif node_parameters.protocol == 2:
-            Print.info('Running TwoChainVABA')
-        else:
-            Print.info('Wrong protocol type!')
-            return
+
+        Print.info('Running Optimistic Compiler')
+
 
         Print.info(f'{bench_parameters.faults} faults')
-        Print.info(f'Timeout {node_parameters.timeout_delay} ms, Network delay {node_parameters.network_delay} ms')
+        Print.info(
+            f'Timeout {node_parameters.timeout_delay} ms, Network delay {node_parameters.network_delay} ms')
         Print.info(f'DDOS attack {node_parameters.ddos}')
+        Print.info(f'Random DDOS attack {node_parameters.random_ddos}')
 
         hosts = selected_hosts[:bench_parameters.nodes[0]]
         # Upload all configuration files.
@@ -307,7 +305,7 @@ class Bench:
         except (subprocess.SubprocessError, GroupException) as e:
             e = FabricError(e) if isinstance(e, GroupException) else e
             Print.error(BenchError('Failed to configure nodes', e))
-        
+
         # Run benchmarks.
         for n in bench_parameters.nodes:
             for r in bench_parameters.rate:
@@ -326,8 +324,8 @@ class Bench:
                 faults = bench_parameters.faults
                 hosts = hosts[:n-faults]
 
-                protocol = node_parameters.protocol
                 ddos = node_parameters.ddos
+                random_ddos = node_parameters.random_ddos
 
                 # Run the benchmark.
                 for i in range(bench_parameters.runs):
@@ -336,7 +334,7 @@ class Bench:
                         self._run_single(
                             hosts, r, bench_parameters, node_parameters, debug
                         )
-                        self._logs(hosts, faults, protocol, ddos).print(PathMaker.result_file(
+                        self._logs(hosts, faults, ddos, random_ddos).print(PathMaker.result_file(
                             n, r, bench_parameters.tx_size, faults
                         ))
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:

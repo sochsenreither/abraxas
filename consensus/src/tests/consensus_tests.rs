@@ -46,7 +46,6 @@ fn spawn_nodes(
                     rx_consensus,
                     tx_consensus_mempool,
                     tx_commit,
-                    Protocol::HotStuff,
                 )
                 .await
                 .unwrap();

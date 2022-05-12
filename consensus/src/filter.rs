@@ -3,10 +3,12 @@ use crate::core::ConsensusMessage;
 use bytes::Bytes;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
+use log::debug;
 use network::NetMessage;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
+use rand::Rng;
 
 pub type FilterInput = (ConsensusMessage, Vec<SocketAddr>);
 
@@ -41,12 +43,17 @@ impl Filter {
 
     async fn delay(input: FilterInput, parameters: Parameters) -> FilterInput {
         let (message, _) = &input;
-        // TODO: message type, correct proto
+        // Only add network delay for non-fallback block proposals
         if let ConsensusMessage::ProposeJolteon(block) = message {
-            // NOTE: Increase the delay here (you can use any value from the 'parameters').
-            // Only add network delay for non-fallback block proposals
-            if parameters.ddos && block.fallback == 0 {
+            if parameters.random_ddos && block.fallback == 0 {
+                // Add delay with chance 1/10
+                if rand::thread_rng().gen_bool(1.0/10.0) {
+                    sleep(Duration::from_millis(parameters.network_delay)).await;
+                }
+                return input;
+            } else if parameters.ddos && block.fallback == 0 {
                 sleep(Duration::from_millis(parameters.network_delay)).await;
+                return input;
             }
         }
         input

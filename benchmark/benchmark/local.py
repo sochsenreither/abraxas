@@ -100,20 +100,12 @@ class LocalBench:
                     timeout
                 )
                 self._background_run(cmd, log_file)
-            
-            if self.node_parameters.protocol == 0:
-                Print.info('Running HotStuff')
-            elif self.node_parameters.protocol == 1:
-                Print.info('Running Async HotStuff')
-            elif self.node_parameters.protocol == 2:
-                Print.info('Running TwoChainVABA')
-            else:
-                Print.info('Wrong protocol type!')
-                return
 
+            Print.info('Running Optimistic Compiler')
             Print.info(f'{self.faults} faults')
             Print.info(f'Timeout {self.node_parameters.timeout_delay} ms, Network delay {self.node_parameters.network_delay} ms')
             Print.info(f'DDOS attack {self.node_parameters.ddos}')
+            Print.info(f'Random DDOS attack {self.node_parameters.random_ddos}')
 
             # Run the nodes.
             dbs = [PathMaker.db_path(i) for i in range(nodes)]
@@ -141,7 +133,7 @@ class LocalBench:
 
             # Parse logs and return the parser.
             Print.info('Parsing logs...')
-            return LogParser.process('./logs', self.faults, self.node_parameters.protocol, self.node_parameters.ddos)
+            return LogParser.process('./logs', self.faults, self.node_parameters.ddos, self.node_parameters.random_ddos)
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()

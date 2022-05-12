@@ -7,20 +7,6 @@ use std::net::SocketAddr;
 pub type Stake = u32;
 pub type EpochNumber = u128;
 
-#[derive(Serialize, Deserialize)]
-pub enum Protocol {
-    HotStuff,
-    AsyncHotStuff,
-    TwoChainVABA,
-    Others,
-}
-
-impl Default for Protocol {
-    fn default() -> Self {
-        Protocol::HotStuff
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Parameters {
     pub timeout_delay: u64,
@@ -29,6 +15,7 @@ pub struct Parameters {
     pub max_payload_size: usize,
     pub min_block_delay: u64,
     pub ddos: bool,
+    pub random_ddos: bool,
     pub exp: u64,
 }
 
@@ -41,6 +28,7 @@ impl Default for Parameters {
             network_delay: 100,
             max_payload_size: 500,
             ddos: false,
+            random_ddos: false,
             exp: 1,
         }
     }

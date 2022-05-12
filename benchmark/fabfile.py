@@ -16,7 +16,7 @@ def local(ctx):
         'rate': 10_000,
         'tx_size': 512,
         'faults': 0,
-        'duration': 10,
+        'duration': 3,
     }
     node_params = {
         'consensus': {
@@ -25,7 +25,8 @@ def local(ctx):
             'max_payload_size': 500,
             'min_block_delay': 0,
             'network_delay': 2000, # message delay on the leaders' proposals during DDoS
-            'ddos': False, # True for DDoS attack on the leader, False otherwise
+            'ddos': True, # True for DDoS attack on the leader, False otherwise
+            'random_ddos': True, # True for random DDoS attack on the leader, False otherwise
             'exp': 1 # multiplicative factor for exponential fallback
         },
         'mempool': {
@@ -34,7 +35,6 @@ def local(ctx):
             'max_payload_size': 15_000,
             'min_block_delay': 0
         },
-        'protocol': 2, # 0 for 2-chain HotStuff, 1 for Ditto, 2 for 2-chain VABA
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug=False).result()
@@ -115,7 +115,8 @@ def remote(ctx):
             'max_payload_size': 1_000,
             'min_block_delay': 100,
             'network_delay': 20_000, # message delay on the leaders' proposals during DDoS
-            'ddos': True, # True for DDoS attack on the leader, False otherwise
+            'ddos': False, # True for DDoS attack on the leader, False otherwise
+            'random_ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 5 # multiplicative factor for exponential fallback
         },
         'mempool': {
@@ -124,7 +125,6 @@ def remote(ctx):
             'max_payload_size': 500_000,
             'min_block_delay': 100
         },
-        'protocol': 1, # 0 for 2-chain HotStuff, 1 for Ditto, 2 for 2-chain VABA
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug=False)

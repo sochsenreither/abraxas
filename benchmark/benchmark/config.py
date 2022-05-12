@@ -106,22 +106,25 @@ class NodeParameters:
             inputs += [json['consensus']['min_block_delay']]
             inputs += [json['consensus']['network_delay']]
             inputs += [json['consensus']['ddos']]
+            inputs += [json['consensus']['random_ddos']]
             inputs += [json['consensus']['exp']]
             inputs += [json['mempool']['queue_capacity']]
             inputs += [json['consensus']['sync_retry_delay']]
             inputs += [json['mempool']['max_payload_size']]
             inputs += [json['mempool']['min_block_delay']]
-            inputs += [json['protocol']]
         except KeyError as e:
             raise ConfigError(f'Malformed parameters: missing key {e}')
 
         if not all(isinstance(x, int) for x in inputs):
             raise ConfigError('Invalid parameters type')
 
-        self.timeout_delay = json['consensus']['timeout_delay'] 
-        self.network_delay = json['consensus']['network_delay'] 
+        self.timeout_delay = json['consensus']['timeout_delay']
+        self.network_delay = json['consensus']['network_delay']
         self.ddos = json['consensus']['ddos']
-        self.protocol = json['protocol']
+        self.random_ddos = json['consensus']['random_ddos']
+        if self.random_ddos:
+            self.ddos = True
+        
         self.json = json
 
     def print(self, filename):
@@ -133,12 +136,12 @@ class NodeParameters:
 class BenchParameters:
     def __init__(self, json):
         try:
-            nodes = json['nodes'] 
+            nodes = json['nodes']
             nodes = nodes if isinstance(nodes, list) else [nodes]
             if not nodes or any(x <= 0 for x in nodes):
                 raise ConfigError('Missing or invalid number of nodes')
 
-            rate = json['rate'] 
+            rate = json['rate']
             rate = rate if isinstance(rate, list) else [rate]
             if not rate:
                 raise ConfigError('Missing input rate')
@@ -162,7 +165,7 @@ class BenchParameters:
 class PlotParameters:
     def __init__(self, json):
         try:
-            nodes = json['nodes'] 
+            nodes = json['nodes']
             nodes = nodes if isinstance(nodes, list) else [nodes]
             if not nodes:
                 raise ConfigError('Missing number of nodes')
@@ -170,11 +173,11 @@ class PlotParameters:
 
             self.tx_size = int(json['tx_size'])
 
-            faults = json['faults'] 
+            faults = json['faults']
             faults = faults if isinstance(faults, list) else [faults]
             self.faults = [int(x) for x in faults] if faults else [0]
 
-            max_lat = json['max_latency'] 
+            max_lat = json['max_latency']
             max_lat = max_lat if isinstance(max_lat, list) else [max_lat]
             if not max_lat:
                 raise ConfigError('Missing max latency')
@@ -185,4 +188,3 @@ class PlotParameters:
 
         except ValueError:
             raise ConfigError('Invalid parameters type')
-
