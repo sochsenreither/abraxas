@@ -1,4 +1,5 @@
 use crate::mempool::MempoolDriver;
+use crate::messages::RC;
 use crate::optimistic_compiler::SubProto;
 use crypto::Digest;
 use log::{debug, info};
@@ -9,28 +10,27 @@ use tokio::sync::oneshot;
 pub struct MempoolWrapper {
     buffer_jolteon: HashSet<Digest>,
     buffer_vaba: HashSet<Digest>,
-    buffer_rc: HashSet<Digest>,
     max: usize,
     digest_len: usize,
     payload_amount: usize,
     mempool_driver: MempoolDriver,
-    rx_request: Receiver<(oneshot::Sender<Vec<Digest>>, SubProto)>,
-    rx_cert: Receiver<Digest>,
-    rx_remove: Receiver<Vec<Digest>>,
+    rx_request: Receiver<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>, // Request from sub protocols
+    rx_cert: Receiver<RC>, // Incoming recovery certificates
+    rx_remove: Receiver<Vec<Digest>>, // Transactions to remove from the sub protocol buffers
+    rc: Option<RC>, // Currently hold recovery certificate. Note: there is only one to prevent the mempool wrapper from spamming vaba with recovery certificates
 }
 
 impl MempoolWrapper {
     pub fn new(
         max: usize,
         mempool_driver: MempoolDriver,
-        rx_request: Receiver<(oneshot::Sender<Vec<Digest>>, SubProto)>,
-        rx_cert: Receiver<Digest>,
+        rx_request: Receiver<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
+        rx_cert: Receiver<RC>,
         rx_remove: Receiver<Vec<Digest>>,
     ) -> Self {
         Self {
             buffer_jolteon: HashSet::new(),
             buffer_vaba: HashSet::new(),
-            buffer_rc: HashSet::new(),
             max,
             digest_len: Digest::default().size(),
             payload_amount: max / Digest::default().size(),
@@ -38,6 +38,7 @@ impl MempoolWrapper {
             rx_request,
             rx_cert,
             rx_remove,
+            rc: None,
         }
     }
 
@@ -59,10 +60,8 @@ impl MempoolWrapper {
 
     // Handles transaction requests from the sub protocols. If there aren't any transactions already in the buffers
     // the mempool will be asked for transactions.
-    // TODO: if proto is vaba and there is a recovery cert: send that along the payload. Don't ever send the cert to
-    // jolteon
-    async fn handle_request(&mut self, answer: oneshot::Sender<Vec<Digest>>, proto: SubProto) {
-        let digests = match proto {
+    async fn handle_request(&mut self, answer: oneshot::Sender<(Vec<Digest>, Option<RC>)>, proto: SubProto) {
+        let (digests, rc) = match proto {
             SubProto::Jolteon => {
                 if self.buffer_jolteon.len() < self.payload_amount {
                     let payload_to_get = self.max - (self.buffer_jolteon.len() * self.digest_len);
@@ -78,45 +77,32 @@ impl MempoolWrapper {
                 for x in &digests {
                     self.buffer_jolteon.remove(x);
                 }
-                digests
+                (digests, None)
             }
             SubProto::Vaba => {
-                // If there are recovery certificates in the buffer, prioritize them as input
-                if self.buffer_vaba.len() + self.buffer_rc.len() < self.payload_amount {
-                    let payload_to_get = self.max
-                        - (self.buffer_vaba.len() * self.digest_len)
-                        - (self.buffer_rc.len() * self.digest_len);
+                if self.buffer_vaba.len() < self.payload_amount {
+                    let payload_to_get = self.max - (self.buffer_vaba.len() * self.digest_len);
                     let data = self.mempool_driver.get(payload_to_get).await;
                     self.log_data(&data, proto);
                 }
-                let mut certs: Vec<Digest> = self
-                    .buffer_rc
-                    .iter()
-                    .take(self.payload_amount)
-                    .cloned()
-                    .collect();
-                let mut digests: Vec<Digest> = self
+                let digests = self
                     .buffer_vaba
                     .iter()
-                    .take(self.payload_amount - certs.len())
+                    .take(self.payload_amount)
                     .cloned()
                     .collect();
                 for x in &digests {
                     self.buffer_vaba.remove(x);
                 }
-                for x in &certs {
-                    self.buffer_rc.remove(x);
-                }
-                certs.append(&mut digests);
-                certs
+                (digests, self.rc.clone())
             }
         };
-        answer.send(digests).expect("Failed to send");
+        if let Some(_) = rc {
+            self.rc = None;
+        }
+        answer.send((digests, rc)).expect("Failed to send");
     }
 
-    fn add_certificate(&mut self, cert: Digest) {
-        self.buffer_rc.insert(cert.clone());
-    }
 
     fn remove_tx(&mut self, txs: Vec<Digest>) {
         debug!("Removing txs {:?}", &txs);
@@ -129,9 +115,9 @@ impl MempoolWrapper {
     pub async fn run(&mut self) {
         loop {
             tokio::select! {
-                Some(cert) = self.rx_cert.recv() =>  self.add_certificate(cert),
                 Some((answer, proto)) = self.rx_request.recv() => self.handle_request(answer, proto).await,
                 Some(txs) = self.rx_remove.recv() => self.remove_tx(txs),
+                Some(rc) = self.rx_cert.recv() => self.rc = Some(rc),
             }
         }
     }

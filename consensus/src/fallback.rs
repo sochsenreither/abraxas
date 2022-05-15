@@ -5,7 +5,7 @@ use crate::error::{ConsensusError, ConsensusResult};
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Timeout, Vote, QC, TC};
+use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Timeout, Vote, QC, RC, TC};
 use crate::optimistic_compiler::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -63,7 +63,7 @@ pub struct Fallback {
     timer: Timer,
     aggregator: Aggregator,
     tx_event: Sender<Event>,
-    tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
+    tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
 }
 
 impl Fallback {
@@ -83,7 +83,7 @@ impl Fallback {
         commit_channel: Sender<Block>,
         is_vaba: bool,
         tx_event: Sender<Event>,
-        tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
+        tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
         let timer = Timer::new(parameters.timeout_delay);
@@ -473,19 +473,14 @@ impl Fallback {
         coin: Option<RandomCoin>,
         qc: QC,
     ) -> ConsensusResult<()> {
-        // Make a new block.
-        // let payload = self
-        //     .mempool_driver
-        //     .get(self.parameters.max_payload_size)
-        //     .await;
+
         let (tx_request, rx_request) = oneshot::channel();
         self.tx_wrapper
             .send((tx_request, SubProto::Vaba))
             .await
             .expect("Unable to request payload");
-        let payload = rx_request.await.expect("unable to receive payload");
-        info!("Requested payload and got back {:?}", payload);
-        // TODO: Check if we got a recovery cert, if yes input to new block
+        let (payload, rc) = rx_request.await.expect("unable to receive payload");
+        debug!("Requested payload and got back {:?}", payload);
         let block = Block::new(
             qc.clone(),
             tc,
@@ -497,7 +492,7 @@ impl Fallback {
             self.fallback,
             payload,
             self.signature_service.clone(),
-            None,
+            rc,
         )
         .await;
         // Performance computation takes place in the main protocol.
@@ -1155,7 +1150,6 @@ impl Fallback {
         loop {
             let result = tokio::select! {
                 Some(message) = self.core_channel.recv() => {
-                    debug!("Received message {:?}", message);
                     match message {
                         ConsensusMessage::ProposeVaba(block) => self.handle_proposal(&block).await,
                         ConsensusMessage::VoteVaba(vote) => self.handle_vote(&vote).await,
@@ -1168,7 +1162,7 @@ impl Fallback {
                         ConsensusMessage::SyncRequestVaba(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReplyVaba(block) => self.handle_proposal(&block).await,
                         _ => {
-                            info!("Wrong message type!");
+                            warn!("Wrong message type!");
                             Ok(())
                         }
                     }

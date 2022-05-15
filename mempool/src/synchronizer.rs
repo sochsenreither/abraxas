@@ -198,9 +198,6 @@ impl Synchronizer {
     pub async fn verify_payload(&mut self, block: Block) -> MempoolResult<bool> {
         let mut missing = HashSet::new();
         for digest in &block.payload {
-            if is_certificate(digest.to_vec()) {
-                continue;
-            }
             if self.store.read(digest.to_vec()).await?.is_none() {
                 debug!("Requesting sync for payload {}", digest);
                 missing.insert(digest.clone());
@@ -224,13 +221,4 @@ impl Synchronizer {
             panic!("Failed to send message to synchronizer core: {}", e);
         }
     }
-}
-
-fn is_certificate(digest: Vec<u8>) -> bool {
-    for i in 0..16 {
-        if digest[i] != 2 {
-            return false;
-        }
-    }
-    true
 }

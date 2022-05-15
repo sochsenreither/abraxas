@@ -13,7 +13,6 @@ use async_recursion::async_recursion;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, info, warn};
 use std::collections::{HashSet, VecDeque};
-use std::convert::TryInto;
 use store::Store;
 use threshold_crypto::PublicKeySet;
 use tokio::sync::mpsc::error::SendError;
@@ -57,10 +56,10 @@ pub struct OptimisticCompiler {
     rx_blocks: Receiver<VecDeque<Block>>, // Blocks to add to the main chain from sub protocols
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols
     tx_vaba: Sender<ConsensusMessage>,   // Channel for forwarding messages to sub protocols
-    tx_cert: Sender<Digest>, // Used to send recovery certificates to the mempool wrapper
+    tx_cert: Sender<RC>, // Used to send recovery certificates to the mempool wrapper
     tx_remove: Sender<Vec<Digest>>, // Used to send signal the mempool wrapper which transactions can be removed
     tx_stop_start: Sender<()>,      // Used to stop and start jolteon
-    recovery_certificates: Vec<RC>, // Recovery certificates for the current era
+    recovery_certificates: VecDeque<RC>, // Recovery certificates for the current era
     rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates
 }
@@ -93,13 +92,13 @@ impl OptimisticCompiler {
         let mempool_driver = MempoolDriver::new(tx_consensus_mempool.clone());
         let (tx_wrapper, rx_wrapper) = channel(1_000);
         let max_payload_size = parameters.clone().max_payload_size;
-        let (tx_cert, rx_cert) = channel(1_000);
+        let (tx_cert2, rx_cert2) = channel(1_000);
         let (tx_remove, rx_remove) = channel(1_000);
         let mut mempool_wrapper = MempoolWrapper::new(
             max_payload_size,
             mempool_driver,
             rx_wrapper,
-            rx_cert,
+            rx_cert2,
             rx_remove,
         );
         tokio::spawn(async move {
@@ -202,10 +201,10 @@ impl OptimisticCompiler {
             rx_blocks,
             tx_jolteon,
             tx_vaba,
-            tx_cert,
+            tx_cert: tx_cert2,
             tx_remove,
             tx_stop_start,
-            recovery_certificates: Vec::new(),
+            recovery_certificates: VecDeque::new(),
             rc_inputted: false,
             rc_received: HashSet::new(),
         }
@@ -219,14 +218,12 @@ impl OptimisticCompiler {
 
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {
-            // TODO: add recovery certificate message
             ConsensusMessage::RecoveryVote(rv) => {
                 if let Err(e) = self.handle_recovery_vote(&rv).await {
                     debug!("{}", e);
                 }
             }
             ConsensusMessage::RecoveryCertificate(rc) => {
-                debug!("Received recovery cert!");
                 self.handle_recovery_certificate(&rc).await
             }
             _ => {
@@ -322,12 +319,8 @@ impl OptimisticCompiler {
         // {
         //     warn!("{}", e);
         // }
-        if !self.rc_inputted {
-            // TODO: send cert to mempool wrapper.
-            self.rc_inputted = true;
-        } else {
-            self.recovery_certificates.push(rc.clone());
-        }
+        self.recovery_certificates.push_back(rc.clone());
+        self.send_recovery_certificate().await;
     }
 
     async fn handle_recovery_vote(&mut self, rv: &RecoveryVote) -> ConsensusResult<()> {
@@ -339,39 +332,35 @@ impl OptimisticCompiler {
                 "Received enough recovery votes for era {}, index {}, inputting cert",
                 rv.era, rv.index
             );
-            let cert = self.make_recovery_cert(rv.era, rv.index);
-            self.tx_cert
-                .send(cert)
-                .await
-                .expect("Failed to send certificate to mempool wrapper");
         }
         Ok(())
     }
 
-    fn make_recovery_cert(&mut self, era: SeqNumber, index: SeqNumber) -> Digest {
-        // TODO: use real threshold certificates
-        let cert_prefix: &[u8] = [2; 16].as_slice();
-        let cert = [
-            cert_prefix,
-            era.to_be_bytes().as_slice(),
-            index.to_be_bytes().as_slice(),
-        ]
-        .concat();
-        Digest(cert.as_slice()[..32].try_into().unwrap())
-        // debug!(
-        //     "Created certificate for e: {}, i: {} -> {:?}",
-        //     era, index, ret
-        // );
+    async fn send_recovery_certificate(&mut self) {
+        if self.rc_inputted {
+            return;
+        }
+        if let Some(rc) = self.recovery_certificates.pop_front() {
+            debug!("Sending RC to mempool wrapper {:?}", rc);
+            self.tx_cert
+                .send(rc.clone())
+                .await
+                .expect("Failed to send recovery certificate to mempool wrapper");
+            self.rc_inputted = true;
+        }
     }
 
     #[async_recursion]
     async fn switch_to_steady(&mut self) {
-        debug!("Entering steady state. Era {}", self.era + 1);
+        self.era += 1;
+        self.state = State::Steady;
+        info!("Entering steady state. Era {}", self.era);
         // Remove recovery certificates of the previous era.
         self.recovery_certificates.clear();
         self.rc_inputted = false;
-        self.era += 1;
-        self.state = State::Steady;
+        // Clean up aggregator
+        self.aggregator.cleanup_recovery_votes(&self.era);
+
         self.ss_try_resolve().await;
         self.tx_stop_start
             .send(())
@@ -381,7 +370,7 @@ impl OptimisticCompiler {
 
     #[async_recursion]
     async fn switch_to_recovery(&mut self) {
-        debug!("Entering recovery state");
+        info!("Entering recovery state");
         self.state = State::Recovery;
         self.tx_stop_start
             .send(())
@@ -458,49 +447,39 @@ impl OptimisticCompiler {
         if self.vaba_chain.len() <= self.l {
             return false;
         }
-        // TODO: when there was no cert input new cert from cert buffer
-        for tx in self.vaba_chain[self.l].clone().payload {
-            // Check if tx is a certificate
-            if OptimisticCompiler::is_certificate(tx.to_vec()) {
-                // TODO: check of qc necessary? This should be a guarantee of vaba
-                let era = u64::from_be_bytes(tx.to_vec()[16..24].try_into().unwrap());
-                let index = u64::from_be_bytes(tx.to_vec()[24..32].try_into().unwrap());
-                if era != self.era {
-                    debug!(
-                        "Got a cert with wrong data e: {}, i: {}, cert: {:?}",
-                        era,
-                        index,
-                        tx.to_vec()
-                    );
-                    self.l += 1;
-                    return self._rs_try_resolve().await;
+        // Check if the block contains a recovery certificate.
+        if let Some(rc) = &self.vaba_chain[self.l].rc {
+            if let Err(e) = rc.verify(&self.committee) {
+                // We got an invalid recovery certificate. Input the next one to the mempool wrapper.
+                warn!("{}", e);
+                self.rc_inputted = false;
+                self.send_recovery_certificate().await;
+                self.l += 1;
+                return self._rs_try_resolve().await;
+            }
+            // We got a valid recovery certificate. Set blocks, increment l and return true
+            if self.main_chain.len() < self.vaba_chain.len() {
+                let mut queue = VecDeque::new();
+                for i in self.main_chain.len()..self.vaba_chain.len() {
+                    queue.push_back(self.vaba_chain[i].clone());
                 }
                 debug!(
-                    "Got a cert with e: {}, i: {}, cert: {:?}",
-                    era,
-                    index,
-                    tx.to_vec()
+                    "Bulk transaction. Adding {} blocks. main {} vaba {}",
+                    queue.len(),
+                    self.main_chain.len(),
+                    self.vaba_chain.len()
                 );
-                // Set blocks, increment l and return true
-                if self.main_chain.len() < self.vaba_chain.len() {
-                    let mut queue = VecDeque::new();
-                    for i in self.main_chain.len()..self.vaba_chain.len() {
-                        queue.push_back(self.vaba_chain[i].clone());
-                    }
-                    debug!(
-                        "Bulk transaction. Adding {} blocks. main {} vaba {}",
-                        queue.len(),
-                        self.main_chain.len(),
-                        self.vaba_chain.len()
-                    );
-                    self.handle_blocks(queue).await;
-                }
-                self.l += 1;
-                return true;
+                self.handle_blocks(queue).await;
             }
+            self.l += 1;
+            return true;
+        } else {
+            // There wasn't any recovery certificate in the block.
+            self.rc_inputted = false;
+            self.send_recovery_certificate().await;
+            self.l += 1;
+            return self._rs_try_resolve().await;
         }
-        self.l += 1;
-        return self._rs_try_resolve().await;
     }
 
     async fn rs_try_vote(&mut self) {

@@ -84,7 +84,7 @@ pub struct Core {
     timer: Timer,
     aggregator: Aggregator,
     tx_event: Sender<Event>,
-    tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
+    tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
     tx_blocks: Sender<VecDeque<Block>>,
     rx_stop_start: Receiver<()>,
 }
@@ -104,7 +104,7 @@ impl Core {
         network_filter: Sender<FilterInput>,
         commit_channel: Sender<Block>,
         tx_event: Sender<Event>,
-        tx_wrapper: Sender<(oneshot::Sender<Vec<Digest>>, SubProto)>,
+        tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
         tx_blocks: Sender<VecDeque<Block>>,
         rx_stop_start: Receiver<()>,
     ) -> Self {
@@ -348,8 +348,8 @@ impl Core {
             .send((tx_request, SubProto::Jolteon))
             .await
             .expect("Unable to request payload");
-        let payload = rx_request.await.expect("unable to receive payload");
-        info!("Requested payload and got back {:?}", payload);
+        let (payload, _) = rx_request.await.expect("unable to receive payload");
+        debug!("Requested payload and got back {:?}", payload);
 
         let block = Block::new(
             self.high_qc.clone(),
@@ -583,7 +583,6 @@ impl Core {
         loop {
             let result = tokio::select! {
                 Some(message) = self.core_channel.recv() => {
-                    debug!("Received message {:?}", message);
                     match message {
                         ConsensusMessage::ProposeJolteon(block) => self.handle_proposal(&block).await,
                         ConsensusMessage::VoteJolteon(vote) => self.handle_vote(&vote).await,
@@ -596,7 +595,7 @@ impl Core {
                         ConsensusMessage::SyncRequestJolteon(digest, sender) => self.handle_sync_request(digest, sender).await,
                         ConsensusMessage::SyncReplyJolteon(block) => self.handle_proposal(&block).await,
                         _ => {
-                            info!("Wrong message type!");
+                            warn!("Wrong message type!");
                             Ok(())
                         },
                     }

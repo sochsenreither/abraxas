@@ -1,7 +1,7 @@
 use crate::config::{Committee, Stake};
 use crate::core::SeqNumber;
 use crate::error::{ConsensusError, ConsensusResult};
-use crate::messages::{RecoveryVote, Timeout, Vote, QC, TC, RC};
+use crate::messages::{RecoveryVote, Timeout, Vote, QC, RC, TC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,7 @@ pub struct Aggregator {
     committee: Committee,
     votes_aggregators: HashMap<SeqNumber, HashMap<Digest, Box<QCMaker>>>,
     timeouts_aggregators: HashMap<SeqNumber, Box<TCMaker>>,
-    recovery_votes_aggregators: HashMap<u64, HashMap<u64, Vec<RecoveryVote>>>, // era -> index -> rv
+    recovery_votes_aggregators: HashMap<SeqNumber, HashMap<SeqNumber, Box<RCMaker>>>, // era -> index -> rv
 }
 
 impl Aggregator {
@@ -30,25 +30,12 @@ impl Aggregator {
     }
 
     pub fn add_recovery_vote(&mut self, rv: RecoveryVote) -> ConsensusResult<Option<RC>> {
-        if let Some(rvs_map) = self.recovery_votes_aggregators.get(&rv.era) {
-            if let Some(rvs) = rvs_map.get(&rv.index) {
-                if rvs.len() >= self.committee.quorum_threshold() as usize {
-                    let rc = RC {
-                        era: rv.era,
-                        index: rv.index,
-                        recovery_votes: rvs.clone(),
-                    };
-                    return Ok(Some(rc));
-                }
-            }
-        }
         self.recovery_votes_aggregators
             .entry(rv.era)
             .or_insert_with(HashMap::new)
             .entry(rv.index)
-            .or_insert_with(Vec::new)
-            .push(rv.clone());
-        Ok(None)
+            .or_insert_with(|| Box::new(RCMaker::new()))
+            .append(rv, &self.committee)
     }
 
     pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {
@@ -84,6 +71,50 @@ impl Aggregator {
     pub fn cleanup_async(&mut self, view: &SeqNumber, round: &SeqNumber) {
         self.votes_aggregators.retain(|k, _| k >= round);
         self.timeouts_aggregators.retain(|k, _| k >= view);
+    }
+    // used in optimistic compiler
+    pub fn cleanup_recovery_votes(&mut self, era: &SeqNumber) {
+        self.recovery_votes_aggregators.retain(|k, _| k >= era);
+    }
+}
+
+struct RCMaker {
+    weight: Stake,
+    votes: Vec<RecoveryVote>,
+    used: HashSet<PublicKey>,
+}
+
+impl RCMaker {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        vote: RecoveryVote,
+        committee: &Committee,
+    ) -> ConsensusResult<Option<RC>> {
+        let author = vote.author;
+        // Ensure it is the first time this authority votes.
+        ensure!(
+            self.used.insert(author),
+            ConsensusError::AuthorityReuseinRC(author)
+        );
+        self.votes.push(vote.clone());
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            self.weight = 0;
+            return Ok(Some(RC {
+                era: vote.era,
+                index: vote.index,
+                recovery_votes: self.votes.clone(),
+            }));
+        }
+        Ok(None)
     }
 }
 
