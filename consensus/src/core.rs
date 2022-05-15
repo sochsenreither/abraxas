@@ -5,7 +5,7 @@ use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 use crate::messages::{
-    Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, TC,
+    Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, TC, RC,
 };
 use crate::optimistic_compiler::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
@@ -58,7 +58,8 @@ pub enum ConsensusMessage {
     SyncReplyVaba(Block),
 
     // Messages used by optimistic compiler
-    Recovery(RecoveryVote),
+    RecoveryVote(RecoveryVote),
+    RecoveryCertificate(RC),
 }
 
 pub struct Core {
@@ -251,6 +252,10 @@ impl Core {
     async fn handle_vote(&mut self, vote: &Vote) -> ConsensusResult<()> {
         debug!("Processing {:?}", vote);
         if vote.round < self.round {
+            debug!(
+                "Processing Vote return vote.round {} self.round {}",
+                vote.round, self.round
+            );
             return Ok(());
         }
 
@@ -357,6 +362,7 @@ impl Core {
             self.fallback,
             payload,
             self.signature_service.clone(),
+            None,
         )
         .await;
         // Performance computation takes place in the main protocol.

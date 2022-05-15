@@ -485,6 +485,7 @@ impl Fallback {
             .expect("Unable to request payload");
         let payload = rx_request.await.expect("unable to receive payload");
         info!("Requested payload and got back {:?}", payload);
+        // TODO: Check if we got a recovery cert, if yes input to new block
         let block = Block::new(
             qc.clone(),
             tc,
@@ -496,6 +497,7 @@ impl Fallback {
             self.fallback,
             payload,
             self.signature_service.clone(),
+            None,
         )
         .await;
         // Performance computation takes place in the main protocol.

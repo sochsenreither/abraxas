@@ -53,6 +53,9 @@ pub enum ConsensusError {
     #[error("Received more than one timeout from {0}")]
     AuthorityReuseinTC(PublicKey),
 
+    #[error("Received more than one recovery vote from {0}")]
+    AuthorityReuseinRC(PublicKey),
+
     #[error("Received more than one random share from {0}")]
     AuthorityReuseinCoin(PublicKey),
 

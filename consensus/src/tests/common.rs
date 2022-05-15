@@ -62,6 +62,7 @@ impl Block {
             fallback,
             payload,
             signature: Signature::default(),
+            rc: None,
         };
         let signature = Signature::new(&block.digest(), secret);
         Self { signature, ..block }

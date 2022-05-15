@@ -1,17 +1,18 @@
 use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters};
 use crate::core::{ConsensusMessage, Core};
+use crate::error::ConsensusResult;
 use crate::fallback::Fallback;
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
-use crate::messages::{Block, RecoveryVote};
+use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
-use crypto::{Digest, PublicKey, SignatureService, Hash};
+use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, info, warn};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::convert::TryInto;
 use store::Store;
 use threshold_crypto::PublicKeySet;
@@ -59,6 +60,9 @@ pub struct OptimisticCompiler {
     tx_cert: Sender<Digest>, // Used to send recovery certificates to the mempool wrapper
     tx_remove: Sender<Vec<Digest>>, // Used to send signal the mempool wrapper which transactions can be removed
     tx_stop_start: Sender<()>,      // Used to stop and start jolteon
+    recovery_certificates: Vec<RC>, // Recovery certificates for the current era
+    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper
+    rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates
 }
 
 impl OptimisticCompiler {
@@ -201,6 +205,9 @@ impl OptimisticCompiler {
             tx_cert,
             tx_remove,
             tx_stop_start,
+            recovery_certificates: Vec::new(),
+            rc_inputted: false,
+            rc_received: HashSet::new(),
         }
     }
 
@@ -212,7 +219,16 @@ impl OptimisticCompiler {
 
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {
-            ConsensusMessage::Recovery(rv) => self.handle_recovery_vote(&rv).await,
+            // TODO: add recovery certificate message
+            ConsensusMessage::RecoveryVote(rv) => {
+                if let Err(e) = self.handle_recovery_vote(&rv).await {
+                    debug!("{}", e);
+                }
+            }
+            ConsensusMessage::RecoveryCertificate(rc) => {
+                debug!("Received recovery cert!");
+                self.handle_recovery_certificate(&rc).await
+            }
             _ => {
                 self.forward_message(message)
                     .await
@@ -237,7 +253,7 @@ impl OptimisticCompiler {
                     .expect("Failed to send transactions to mempool wrapper");
                 info!("Committed {}", block);
 
-                #[cfg(feature = "benchmark")]
+                //#[cfg(feature = "benchmark")]
                 for x in &block.payload {
                     if OptimisticCompiler::is_certificate(x.to_vec()) {
                         continue;
@@ -289,22 +305,47 @@ impl OptimisticCompiler {
         }
     }
 
-    async fn handle_recovery_vote(&mut self, rv: &RecoveryVote) {
-        //debug!("Received recovery vote {:?}", rv);
-        if let Ok(_) = rv.verify() {
-            let res = self.aggregator.add_recovery_vote(rv.clone());
-            if res {
-                debug!(
-                    "Received enough recovery votes for era {}, index {}, inputting cert",
-                    rv.era, rv.index
-                );
-                let cert = self.make_recovery_cert(rv.era, rv.index);
-                self.tx_cert
-                    .send(cert)
-                    .await
-                    .expect("Failed to send certificate to mempool wrapper");
-            }
+    async fn handle_recovery_certificate(&mut self, rc: &RC) {
+        if self.rc_received.contains(&rc.index) {
+            return;
         }
+        // Multicast rc.
+        // debug!("Multicasting rc {:?}", rc.clone());
+        // if let Err(e) = Synchronizer::transmit(
+        //     ConsensusMessage::RecoveryCertificate(rc.clone()),
+        //     &self.name,
+        //     None,
+        //     &self.network_filter,
+        //     &self.committee,
+        // )
+        // .await
+        // {
+        //     warn!("{}", e);
+        // }
+        if !self.rc_inputted {
+            // TODO: send cert to mempool wrapper.
+            self.rc_inputted = true;
+        } else {
+            self.recovery_certificates.push(rc.clone());
+        }
+    }
+
+    async fn handle_recovery_vote(&mut self, rv: &RecoveryVote) -> ConsensusResult<()> {
+        //debug!("Received recovery vote {:?}", rv);
+        rv.verify()?;
+        if let Some(rc) = self.aggregator.add_recovery_vote(rv.clone())? {
+            self.handle_recovery_certificate(&rc).await;
+            debug!(
+                "Received enough recovery votes for era {}, index {}, inputting cert",
+                rv.era, rv.index
+            );
+            let cert = self.make_recovery_cert(rv.era, rv.index);
+            self.tx_cert
+                .send(cert)
+                .await
+                .expect("Failed to send certificate to mempool wrapper");
+        }
+        Ok(())
     }
 
     fn make_recovery_cert(&mut self, era: SeqNumber, index: SeqNumber) -> Digest {
@@ -326,6 +367,9 @@ impl OptimisticCompiler {
     #[async_recursion]
     async fn switch_to_steady(&mut self) {
         debug!("Entering steady state. Era {}", self.era + 1);
+        // Remove recovery certificates of the previous era.
+        self.recovery_certificates.clear();
+        self.rc_inputted = false;
         self.era += 1;
         self.state = State::Steady;
         self.ss_try_resolve().await;
@@ -414,6 +458,7 @@ impl OptimisticCompiler {
         if self.vaba_chain.len() <= self.l {
             return false;
         }
+        // TODO: when there was no cert input new cert from cert buffer
         for tx in self.vaba_chain[self.l].clone().payload {
             // Check if tx is a certificate
             if OptimisticCompiler::is_certificate(tx.to_vec()) {
@@ -489,8 +534,8 @@ impl OptimisticCompiler {
 
         // Send recovery votes
         for rv in recovery_votes {
-            match Synchronizer::transmit(
-                ConsensusMessage::Recovery(rv.clone()),
+            if let Err(e) = Synchronizer::transmit(
+                ConsensusMessage::RecoveryVote(rv.clone()),
                 &self.name,
                 None,
                 &self.network_filter,
@@ -498,10 +543,11 @@ impl OptimisticCompiler {
             )
             .await
             {
-                Ok(_) => (),
-                Err(e) => warn!("{}", e),
+                warn!("{}", e);
             };
-            self.handle_recovery_vote(&rv).await;
+            if let Err(e) = self.handle_recovery_vote(&rv).await {
+                debug!("{}", e);
+            }
         }
     }
 

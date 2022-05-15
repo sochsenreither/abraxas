@@ -1,11 +1,10 @@
 use crate::config::{Committee, Stake};
 use crate::core::SeqNumber;
 use crate::error::{ConsensusError, ConsensusResult};
-use crate::messages::{RecoveryVote, Timeout, Vote, QC, TC};
+use crate::messages::{RecoveryVote, Timeout, Vote, QC, TC, RC};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::{HashMap, HashSet};
-// use std::convert::TryInto;
 
 #[cfg(test)]
 #[path = "tests/aggregator_tests.rs"]
@@ -30,11 +29,16 @@ impl Aggregator {
         }
     }
 
-    pub fn add_recovery_vote(&mut self, rv: RecoveryVote) -> bool {
+    pub fn add_recovery_vote(&mut self, rv: RecoveryVote) -> ConsensusResult<Option<RC>> {
         if let Some(rvs_map) = self.recovery_votes_aggregators.get(&rv.era) {
             if let Some(rvs) = rvs_map.get(&rv.index) {
                 if rvs.len() >= self.committee.quorum_threshold() as usize {
-                    return true;
+                    let rc = RC {
+                        era: rv.era,
+                        index: rv.index,
+                        recovery_votes: rvs.clone(),
+                    };
+                    return Ok(Some(rc));
                 }
             }
         }
@@ -44,7 +48,7 @@ impl Aggregator {
             .entry(rv.index)
             .or_insert_with(Vec::new)
             .push(rv.clone());
-        false
+        Ok(None)
     }
 
     pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {

@@ -70,6 +70,7 @@ pub fn block() -> Block {
         fallback: 0,
         payload: Vec::new(),
         signature: Signature::default(),
+        rc: None,
     };
     let signature = Signature::new(&block.digest(), &secret);
     Block { signature, ..block }

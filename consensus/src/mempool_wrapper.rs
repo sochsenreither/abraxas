@@ -59,6 +59,8 @@ impl MempoolWrapper {
 
     // Handles transaction requests from the sub protocols. If there aren't any transactions already in the buffers
     // the mempool will be asked for transactions.
+    // TODO: if proto is vaba and there is a recovery cert: send that along the payload. Don't ever send the cert to
+    // jolteon
     async fn handle_request(&mut self, answer: oneshot::Sender<Vec<Digest>>, proto: SubProto) {
         let digests = match proto {
             SubProto::Jolteon => {

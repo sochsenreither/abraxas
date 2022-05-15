@@ -27,6 +27,7 @@ pub struct Block {
     pub fallback: Bool,       // 1 if async block; 0 if sync block
     pub payload: Vec<Digest>,
     pub signature: Signature,
+    pub rc: Option<RC>
 }
 
 impl Block {
@@ -41,6 +42,7 @@ impl Block {
         fallback: Bool,
         payload: Vec<Digest>,
         mut signature_service: SignatureService,
+        rc: Option<RC>,
     ) -> Self {
         let mut block = Self {
             qc,
@@ -53,6 +55,7 @@ impl Block {
             fallback,
             payload,
             signature: Signature::default(),
+            rc,
         };
         if fallback == 0 {
             block.height = 0;
@@ -666,12 +669,12 @@ impl fmt::Debug for RandomCoin {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecoveryVote {
     pub era: SeqNumber,
     pub index: SeqNumber,
     pub qc: QC,
-    pub signature: Signature,
+    pub signature_share: Signature,
     pub author: PublicKey,
 }
 
@@ -684,18 +687,18 @@ impl RecoveryVote {
         author: PublicKey,
     ) -> Self {
         let qc_hash = qc.digest();
-        let signature = signature_service.request_signature(qc_hash).await;
+        let signature_share = signature_service.request_signature(qc_hash).await;
         Self {
             era,
             index,
             qc,
-            signature,
+            signature_share,
             author,
         }
     }
 
     pub fn verify(&self) -> ConsensusResult<()> {
-        self.signature.verify(&self.qc.digest(), &self.author)?;
+        self.signature_share.verify(&self.qc.digest(), &self.author)?;
         Ok(())
     }
 }
@@ -706,6 +709,50 @@ impl fmt::Debug for RecoveryVote {
             f,
             "RecoveryVote(author {}, era {}, index {}, qc {:?})",
             self.author, self.era, self.index, self.qc
+        )
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RC {
+    pub era: SeqNumber,
+    pub index: SeqNumber,
+    pub recovery_votes: Vec<RecoveryVote>
+}
+
+impl RC {
+    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+        // Ensure the RC has a quorum.
+        let mut weight = 0;
+        let mut used = HashSet::new();
+        for rv in self.recovery_votes.iter() {
+            ensure!(
+                !used.contains(&rv.author),
+                ConsensusError::AuthorityReuseinRC(rv.author)
+            );
+            let voting_rights = committee.stake(&rv.author);
+            ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(rv.author));
+            used.insert(&rv.author);
+            weight += voting_rights;
+        }
+        ensure!(
+            weight >= committee.quorum_threshold(),
+            ConsensusError::TCRequiresQuorum
+        );
+        // Check the signatures.
+        for rv in &self.recovery_votes {
+            rv.verify()?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for RC {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "RC(era {}, index {}, votes: {:?})",
+            self.era, self.index, self.recovery_votes
         )
     }
 }
