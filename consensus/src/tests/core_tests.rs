@@ -190,7 +190,7 @@ async fn commit_block() {
     let (tx_core, _rx_network) = core(public_key, secret_key, store_path).await;
 
     // Send a the blocks to the core.
-    let committed = chain[0].clone();
+    let _committed = chain[0].clone();
     for block in chain {
         let message = ConsensusMessage::ProposeJolteon(block);
         tx_core.send(message).await.unwrap();

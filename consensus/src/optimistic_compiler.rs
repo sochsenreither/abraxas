@@ -11,7 +11,7 @@ use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
-use crypto::{Digest, PublicKey, SignatureService, Hash};
+use crypto::{Digest, Hash, PublicKey, SignatureService};
 use log::{debug, info, warn};
 use std::collections::{HashSet, VecDeque};
 use store::Store;
@@ -52,13 +52,14 @@ pub struct OptimisticCompiler {
     signature_service: SignatureService,
     network_filter: Sender<FilterInput>,
     main_chain_len: usize,
-    vaba_chain: Vec<Block>,
+    vaba_chain_len: usize,
+    vaba_chain: Vec<Vec<u8>>,
     main_txs: HashSet<Digest>, // Contains transactions in the main chain that are not yet certified.
     rx_main: Receiver<ConsensusMessage>, // Incoming consensus messages.
     rx_event: Receiver<Event>, // Events from sub protocols.
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
     tx_vaba: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
-    tx_mempool_wrapper_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
+    tx_mempool_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
     tx_stop_start: Sender<()>,                  // Used to stop and start jolteon.
     recovery_certificates: VecDeque<RC>,        // Recovery certificates for the current era.
     rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
@@ -185,13 +186,14 @@ impl OptimisticCompiler {
             signature_service: signature_service.clone(),
             network_filter: tx_filter.clone(),
             main_chain_len: 0,
+            vaba_chain_len: 0,
             vaba_chain: Vec::new(),
             main_txs: HashSet::new(),
             rx_main,
             rx_event,
             tx_jolteon,
             tx_vaba,
-            tx_mempool_wrapper_cmd,
+            tx_mempool_cmd: tx_mempool_wrapper_cmd,
             tx_stop_start,
             recovery_certificates: VecDeque::new(),
             rc_inputted: false,
@@ -199,6 +201,25 @@ impl OptimisticCompiler {
             tx_application_layer: tx_commit.clone(),
             store: store.clone(),
         }
+    }
+
+    async fn store_vaba_block(&mut self, block: &Block) {
+        let key = block.digest().to_vec();
+        self.vaba_chain.push(key.clone());
+        self.vaba_chain_len += 1;
+        let value = bincode::serialize(block).expect("Failed to serialize block");
+        self.store.write(key, value).await;
+    }
+
+    async fn get_vaba_block(&mut self, index: usize) -> Block {
+        let key = self.vaba_chain[index].clone();
+        // We panic if we get an error, because this means the store is broken.
+        self.store
+            .read(key)
+            .await
+            .unwrap()
+            .and_then(|bytes| bincode::deserialize(&bytes).ok())
+            .unwrap()
     }
 
     async fn store_block(&mut self, block: &Block) {
@@ -229,14 +250,12 @@ impl OptimisticCompiler {
         // Received block(s) that can be appended to the main chain.
         debug!(
             "Received block(s): {:?}. Len main {} Len vaba {}",
-            blocks,
-            self.main_chain_len,
-            self.vaba_chain.len()
+            blocks, self.main_chain_len, self.vaba_chain_len
         );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
                 // Remove transactions from the mempool wrapper
-                self.tx_mempool_wrapper_cmd
+                self.tx_mempool_cmd
                     .send(MempoolCmd::Remove(block.payload.clone()))
                     .await
                     .expect("Failed to send transactions to mempool wrapper");
@@ -258,7 +277,6 @@ impl OptimisticCompiler {
             if let Err(e) = self.tx_application_layer.send(block).await {
                 warn!("Failed to send block through the commit channel: {}", e);
             }
-
         }
     }
 
@@ -268,12 +286,7 @@ impl OptimisticCompiler {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
-                        // debug!(
-                        //     "Vaba out: Len main {} Len vaba {}",
-                        //     self.main_chain_len,
-                        //     self.vaba_chain.len()
-                        // );
-                        self.vaba_chain.push(block);
+                        self.store_vaba_block(&block).await;
                         self.ss_try_resolve().await;
                     }
                     Event::JolteonOut(blocks) => self.handle_blocks(blocks).await,
@@ -285,12 +298,7 @@ impl OptimisticCompiler {
             }
             State::Recovery => match event {
                 Event::VabaOut(block) => {
-                    // debug!(
-                    //     "Vaba out: Len main {} Len vaba {}",
-                    //     self.main_chain_len,
-                    //     self.vaba_chain.len()
-                    // );
-                    self.vaba_chain.push(block);
+                    self.store_vaba_block(&block).await;
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
                     self.rs_try_resolve().await;
@@ -340,7 +348,7 @@ impl OptimisticCompiler {
         }
         if let Some(rc) = self.recovery_certificates.pop_front() {
             debug!("Sending RC to mempool wrapper {:?}", rc);
-            self.tx_mempool_wrapper_cmd
+            self.tx_mempool_cmd
                 .send(MempoolCmd::AddCert(rc.clone()))
                 .await
                 .expect("Failed to send recovery certificate to mempool wrapper");
@@ -380,37 +388,34 @@ impl OptimisticCompiler {
 
     /* Steady state functions */
 
+    #[async_recursion]
     async fn ss_try_resolve(&mut self) {
-        if self._ss_try_resolve() {
+        if self._ss_try_resolve().await {
             self.switch_to_recovery().await;
         }
     }
 
-    fn _ss_try_resolve(&mut self) -> bool {
-        if self.vaba_chain.len() < self.l + self.loopback {
+    #[async_recursion]
+    async fn _ss_try_resolve(&mut self) -> bool {
+        if self.vaba_chain_len < self.l + self.loopback {
             return false;
-        } else {
-            if self.vaba_chain[self.l].payload.is_empty() {
-                self.l += 1;
-                return self._ss_try_resolve();
-            }
-            for tx in &self.vaba_chain[self.l].payload {
-                let x = tx.clone();
-                if !self.certified_on_time(x.clone()) {
-                    // debug!(
-                    //     "Tx {} not certified in time in block {:?}",
-                    //     &x, &self.vaba_chain[self.l]
-                    // );
-                    // If there is one tx not certified on time switch to recovery state
-                    self.l += 1;
-                    return true;
-                } else {
-                    self.l += 1;
-                    return self._ss_try_resolve();
-                }
-            }
-            false
         }
+        let block = self.get_vaba_block(self.l).await;
+        if block.payload.is_empty() {
+            self.l += 1;
+            return self._ss_try_resolve().await;
+        }
+        for tx in block.payload {
+            let x = tx.clone();
+            if !self.certified_on_time(x.clone()) {
+                self.l += 1;
+                return true;
+            } else {
+                self.l += 1;
+                return self._ss_try_resolve().await;
+            }
+        }
+        false
     }
 
     fn certified_on_time(&mut self, tx: Digest) -> bool {
@@ -421,9 +426,7 @@ impl OptimisticCompiler {
         }
         debug!(
             "Tx {} not yet in main chain. len main: {}. len vaba: {}",
-            tx,
-            self.main_chain_len,
-            self.vaba_chain.len()
+            tx, self.main_chain_len, self.vaba_chain_len
         );
         false
     }
@@ -438,11 +441,12 @@ impl OptimisticCompiler {
 
     #[async_recursion]
     async fn _rs_try_resolve(&mut self) -> bool {
-        if self.vaba_chain.len() <= self.l {
+        if self.vaba_chain_len <= self.l {
             return false;
         }
         // Check if the block contains a recovery certificate.
-        if let Some(rc) = &self.vaba_chain[self.l].rc {
+        let block = self.get_vaba_block(self.l).await;
+        if let Some(rc) = block.rc {
             if let Err(e) = rc.verify(&self.committee) {
                 // We got an invalid recovery certificate. Input the next recovery certificate to the mempool wrapper.
                 warn!("{}", e);
@@ -452,23 +456,25 @@ impl OptimisticCompiler {
                 return self._rs_try_resolve().await;
             }
             // We got a valid recovery certificate. Set blocks, increment l and return true
-            if self.main_chain_len < self.vaba_chain.len() {
+            if self.main_chain_len < self.vaba_chain_len {
                 let mut queue = VecDeque::new();
-                for i in self.main_chain_len..self.vaba_chain.len() {
-                    queue.push_back(self.vaba_chain[i].clone());
+                for i in self.main_chain_len..self.vaba_chain_len {
+                    let block = self.get_vaba_block(i).await;
+                    queue.push_back(block);
                 }
                 debug!(
                     "Bulk transaction. Adding {} blocks. main {} vaba {}",
                     queue.len(),
                     self.main_chain_len,
-                    self.vaba_chain.len()
+                    self.vaba_chain_len
                 );
                 self.handle_blocks(queue).await;
             }
             self.l += 1;
             return true;
         } else {
-            // There wasn't any recovery certificate in the block.
+            // There wasn't any recovery certificate in the block. We send a certificate to the mempool wrapper, so that
+            // the next vaba block will include a certificate.
             self.rc_inputted = false;
             self.send_recovery_certificate().await;
             self.l += 1;
@@ -479,25 +485,25 @@ impl OptimisticCompiler {
     async fn rs_try_vote(&mut self) {
         debug!(
             "rs_try_vote: k_voted: {} len vaba: {}",
-            self.k_voted,
-            self.vaba_chain.len()
+            self.k_voted, self.vaba_chain_len
         );
         let mut recovery_votes = Vec::new();
-        for i in self.k_voted..self.vaba_chain.len() {
+        for i in self.k_voted..self.vaba_chain_len {
+            let block = self.get_vaba_block(i).await;
             self.k_voted = i - 1;
-            if self.vaba_chain[i].qc.view > self.era {
+            if block.qc.view > self.era {
                 break;
             }
-            if self.vaba_chain[i].qc.view == self.era {
+            if block.qc.view == self.era {
                 debug!(
                     "Matching qc found! era: {} index: {}",
-                    self.vaba_chain[i].qc.view, self.vaba_chain[i].qc.round
+                    block.qc.view, block.qc.round
                 );
                 let rv = RecoveryVote::new(
                     self.era,
-                    self.vaba_chain[i].round,
+                    block.round,
                     self.signature_service.clone(),
-                    self.vaba_chain[i].qc.clone(),
+                    block.qc.clone(),
                     self.name,
                 )
                 .await;
