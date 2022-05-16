@@ -118,14 +118,13 @@ impl MempoolWrapper {
 
     pub async fn run(&mut self) {
         loop {
-            tokio::select! {
-                Some(cmd) = self.rx_command.recv() => {
-                    match cmd {
-                        MempoolCmd::Request((answer, proto)) => self.handle_request(answer, proto).await,
-                        MempoolCmd::Remove(txs) => self.remove_tx(txs),
-                        MempoolCmd::AddCert(rc) => self.rc = Some(rc),
-                    }
+            match self.rx_command.recv().await {
+                Some(MempoolCmd::Request((answer, proto))) => {
+                    self.handle_request(answer, proto).await
                 }
+                Some(MempoolCmd::Remove(txs)) => self.remove_tx(txs),
+                Some(MempoolCmd::AddCert(rc)) => self.rc = Some(rc),
+                None => (),
             }
         }
     }

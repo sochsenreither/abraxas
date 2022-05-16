@@ -371,7 +371,6 @@ impl Core {
         //     #[cfg(feature = "benchmark")]
         //     for x in &block.payload {
         //         // NOTE: This log entry is used to compute performance.
-        //         // TODO: move this to main proto? How?
         //         info!("Incoming TX({})", base64::encode(x));
         //     }
         // }

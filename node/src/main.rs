@@ -50,7 +50,7 @@ async fn main() {
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .get_matches();
 
-    let log_level = match matches.occurrences_of("v") {
+    let _log_level = match matches.occurrences_of("v") {
         0 => "error",
         1 => "warn",
         2 => "info",

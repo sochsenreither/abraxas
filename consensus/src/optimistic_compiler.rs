@@ -11,7 +11,7 @@ use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
-use crypto::{Digest, PublicKey, SignatureService};
+use crypto::{Digest, PublicKey, SignatureService, Hash};
 use log::{debug, info, warn};
 use std::collections::{HashSet, VecDeque};
 use store::Store;
@@ -51,7 +51,7 @@ pub struct OptimisticCompiler {
     aggregator: Aggregator,
     signature_service: SignatureService,
     network_filter: Sender<FilterInput>,
-    main_chain: Vec<Block>,
+    main_chain_len: usize,
     vaba_chain: Vec<Block>,
     main_txs: HashSet<Digest>, // Contains transactions in the main chain that are not yet certified.
     rx_main: Receiver<ConsensusMessage>, // Incoming consensus messages.
@@ -64,6 +64,7 @@ pub struct OptimisticCompiler {
     rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
     tx_application_layer: Sender<Block>,
+    store: Store,
 }
 
 impl OptimisticCompiler {
@@ -183,7 +184,7 @@ impl OptimisticCompiler {
             aggregator: Aggregator::new(committee.clone()),
             signature_service: signature_service.clone(),
             network_filter: tx_filter.clone(),
-            main_chain: Vec::new(),
+            main_chain_len: 0,
             vaba_chain: Vec::new(),
             main_txs: HashSet::new(),
             rx_main,
@@ -196,14 +197,15 @@ impl OptimisticCompiler {
             rc_inputted: false,
             rc_received: HashSet::new(),
             tx_application_layer: tx_commit.clone(),
+            store: store.clone(),
         }
     }
 
-    // async fn store_block(&mut self, block: &Block) {
-    //     let key = block.digest().to_vec();
-    //     let value = bincode::serialize(block).expect("Failed to serialize block");
-    //     self.store.write(key, value).await;
-    // }
+    async fn store_block(&mut self, block: &Block) {
+        let key = block.digest().to_vec();
+        let value = bincode::serialize(block).expect("Failed to serialize block");
+        self.store.write(key, value).await;
+    }
 
     async fn handle_message(&mut self, message: ConsensusMessage) {
         match message {
@@ -228,7 +230,7 @@ impl OptimisticCompiler {
         debug!(
             "Received block(s): {:?}. Len main {} Len vaba {}",
             blocks,
-            self.main_chain.len(),
+            self.main_chain_len,
             self.vaba_chain.len()
         );
         while let Some(block) = blocks.pop_back() {
@@ -249,8 +251,8 @@ impl OptimisticCompiler {
                     info!("Committed TX({})", base64::encode(x));
                 }
             }
-            // TODO: save in store
-            self.main_chain.push(block.clone());
+            self.main_chain_len += 1;
+            self.store_block(&block).await;
             // Send all the newly committed blocks to the node's application layer.
             debug!("Committed {:?}", block);
             if let Err(e) = self.tx_application_layer.send(block).await {
@@ -266,11 +268,11 @@ impl OptimisticCompiler {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
-                        debug!(
-                            "Vaba out: Len main {} Len vaba {}",
-                            self.main_chain.len(),
-                            self.vaba_chain.len()
-                        );
+                        // debug!(
+                        //     "Vaba out: Len main {} Len vaba {}",
+                        //     self.main_chain_len,
+                        //     self.vaba_chain.len()
+                        // );
                         self.vaba_chain.push(block);
                         self.ss_try_resolve().await;
                     }
@@ -283,11 +285,11 @@ impl OptimisticCompiler {
             }
             State::Recovery => match event {
                 Event::VabaOut(block) => {
-                    debug!(
-                        "Vaba out: Len main {} Len vaba {}",
-                        self.main_chain.len(),
-                        self.vaba_chain.len()
-                    );
+                    // debug!(
+                    //     "Vaba out: Len main {} Len vaba {}",
+                    //     self.main_chain_len,
+                    //     self.vaba_chain.len()
+                    // );
                     self.vaba_chain.push(block);
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
@@ -420,7 +422,7 @@ impl OptimisticCompiler {
         debug!(
             "Tx {} not yet in main chain. len main: {}. len vaba: {}",
             tx,
-            self.main_chain.len(),
+            self.main_chain_len,
             self.vaba_chain.len()
         );
         false
@@ -450,15 +452,15 @@ impl OptimisticCompiler {
                 return self._rs_try_resolve().await;
             }
             // We got a valid recovery certificate. Set blocks, increment l and return true
-            if self.main_chain.len() < self.vaba_chain.len() {
+            if self.main_chain_len < self.vaba_chain.len() {
                 let mut queue = VecDeque::new();
-                for i in self.main_chain.len()..self.vaba_chain.len() {
+                for i in self.main_chain_len..self.vaba_chain.len() {
                     queue.push_back(self.vaba_chain[i].clone());
                 }
                 debug!(
                     "Bulk transaction. Adding {} blocks. main {} vaba {}",
                     queue.len(),
-                    self.main_chain.len(),
+                    self.main_chain_len,
                     self.vaba_chain.len()
                 );
                 self.handle_blocks(queue).await;
