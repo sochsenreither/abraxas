@@ -27,7 +27,8 @@ def local(ctx):
             'network_delay': 2000, # message delay on the leaders' proposals during DDoS
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': False, # True for random DDoS attack on the leader, False otherwise
-            'exp': 1 # multiplicative factor for exponential fallback
+            'exp': 1, # multiplicative factor for exponential fallback
+            'loopback': 15 # multiplicative factor for exponential fallback
         },
         'mempool': {
             'queue_capacity': 10_000,

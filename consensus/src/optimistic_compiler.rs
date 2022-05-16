@@ -6,6 +6,7 @@ use crate::fallback::Fallback;
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
+use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
 use crate::{MempoolWrapper, SeqNumber};
@@ -36,6 +37,7 @@ pub enum Event {
     Lock,
     Advance,
     VabaOut(Block),
+    JolteonOut(VecDeque<Block>),
 }
 
 pub struct OptimisticCompiler {
@@ -51,17 +53,17 @@ pub struct OptimisticCompiler {
     network_filter: Sender<FilterInput>,
     main_chain: Vec<Block>,
     vaba_chain: Vec<Block>,
-    rx_main: Receiver<ConsensusMessage>, // Incoming consensus messages
-    rx_event: Receiver<Event>,           // Events from sub protocols
-    rx_blocks: Receiver<VecDeque<Block>>, // Blocks to add to the main chain from sub protocols
-    tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols
-    tx_vaba: Sender<ConsensusMessage>,   // Channel for forwarding messages to sub protocols
-    tx_cert: Sender<RC>, // Used to send recovery certificates to the mempool wrapper
-    tx_remove: Sender<Vec<Digest>>, // Used to send signal the mempool wrapper which transactions can be removed
-    tx_stop_start: Sender<()>,      // Used to stop and start jolteon
-    recovery_certificates: VecDeque<RC>, // Recovery certificates for the current era
-    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper
-    rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates
+    main_txs: HashSet<Digest>, // Contains transactions in the main chain that are not yet certified.
+    rx_main: Receiver<ConsensusMessage>, // Incoming consensus messages.
+    rx_event: Receiver<Event>, // Events from sub protocols.
+    tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
+    tx_vaba: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
+    tx_mempool_wrapper_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
+    tx_stop_start: Sender<()>,                  // Used to stop and start jolteon.
+    recovery_certificates: VecDeque<RC>,        // Recovery certificates for the current era.
+    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
+    rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
+    tx_application_layer: Sender<Block>,
 }
 
 impl OptimisticCompiler {
@@ -84,30 +86,20 @@ impl OptimisticCompiler {
         // Channel to stop and start jolteon
         let (tx_stop_start, rx_stop_start) = channel(100);
 
-        // Channel for sending blocks from the sub protocols to the main protocol.
-        let (tx_blocks, rx_blocks) = channel(1_000);
-
         // MempoolWrapper which acts as a buffer, such that both sub protocols receive the
         // same transactions.
         let mempool_driver = MempoolDriver::new(tx_consensus_mempool.clone());
-        let (tx_wrapper, rx_wrapper) = channel(1_000);
         let max_payload_size = parameters.clone().max_payload_size;
-        let (tx_cert2, rx_cert2) = channel(1_000);
-        let (tx_remove, rx_remove) = channel(1_000);
-        let mut mempool_wrapper = MempoolWrapper::new(
-            max_payload_size,
-            mempool_driver,
-            rx_wrapper,
-            rx_cert2,
-            rx_remove,
-        );
+        let (tx_mempool_wrapper_cmd, rx_mempool_wrapper_cmd) = channel(1_000);
+        let mut mempool_wrapper =
+            MempoolWrapper::new(max_payload_size, mempool_driver, rx_mempool_wrapper_cmd);
         tokio::spawn(async move {
             mempool_wrapper.run().await;
         });
 
         // Channels for forwarding messages to the correct subprotocol.
-        let (tx_jolteon, rx_jolteon) = channel(10_000);
-        let (tx_vaba, rx_vaba) = channel(10_000);
+        let (tx_jolteon, rx_jolteon) = channel(1_000);
+        let (tx_vaba, rx_vaba) = channel(1_000);
 
         // Create synchronizer for jolteon
         let sync_retry_delay = parameters.clone().sync_retry_delay;
@@ -147,11 +139,9 @@ impl OptimisticCompiler {
             synchronizer_jolteon,
             /* core_channel */ rx_jolteon,
             /* network_filter */ tx_filter.clone(),
-            /* commit_channel */ tx_commit.clone(),
             tx_event.clone(),
-            tx_wrapper.clone(),
-            tx_blocks.clone(),
             rx_stop_start,
+            tx_mempool_wrapper_cmd.clone(),
         );
 
         // Create one vaba instance
@@ -167,10 +157,9 @@ impl OptimisticCompiler {
             synchronizer_vaba,
             /* core_channel */ rx_vaba,
             /* network_filter */ tx_filter.clone(),
-            /* commit_channel */ tx_commit.clone(),
             true, // running vaba
             tx_event.clone(),
-            tx_wrapper.clone(),
+            tx_mempool_wrapper_cmd.clone(),
         );
 
         // Run vaba
@@ -187,7 +176,7 @@ impl OptimisticCompiler {
             name,
             committee: committee.clone(),
             era: 0,
-            loopback: 10,
+            loopback: parameters.loopback,
             l: 0,
             k_voted: 0,
             state: State::Steady,
@@ -196,17 +185,17 @@ impl OptimisticCompiler {
             network_filter: tx_filter.clone(),
             main_chain: Vec::new(),
             vaba_chain: Vec::new(),
+            main_txs: HashSet::new(),
             rx_main,
             rx_event,
-            rx_blocks,
             tx_jolteon,
             tx_vaba,
-            tx_cert: tx_cert2,
-            tx_remove,
+            tx_mempool_wrapper_cmd,
             tx_stop_start,
             recovery_certificates: VecDeque::new(),
             rc_inputted: false,
             rc_received: HashSet::new(),
+            tx_application_layer: tx_commit.clone(),
         }
     }
 
@@ -244,25 +233,31 @@ impl OptimisticCompiler {
         );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
-                self.tx_remove
-                    .send(block.payload.clone())
+                // Remove transactions from the mempool wrapper
+                self.tx_mempool_wrapper_cmd
+                    .send(MempoolCmd::Remove(block.payload.clone()))
                     .await
                     .expect("Failed to send transactions to mempool wrapper");
+
                 info!("Committed {}", block);
 
-                //#[cfg(feature = "benchmark")]
                 for x in &block.payload {
-                    if OptimisticCompiler::is_certificate(x.to_vec()) {
-                        continue;
-                    }
+                    self.main_txs.insert(x.clone());
+
+                    #[cfg(feature = "benchmark")]
                     // NOTE: This log entry is used to compute performance.
                     info!("Committed TX({})", base64::encode(x));
                 }
             }
-            self.main_chain.push(block);
-        }
+            // TODO: save in store
+            self.main_chain.push(block.clone());
+            // Send all the newly committed blocks to the node's application layer.
+            debug!("Committed {:?}", block);
+            if let Err(e) = self.tx_application_layer.send(block).await {
+                warn!("Failed to send block through the commit channel: {}", e);
+            }
 
-        self.ss_try_resolve().await;
+        }
     }
 
     async fn handle_event(&mut self, event: Event) {
@@ -279,6 +274,7 @@ impl OptimisticCompiler {
                         self.vaba_chain.push(block);
                         self.ss_try_resolve().await;
                     }
+                    Event::JolteonOut(blocks) => self.handle_blocks(blocks).await,
                     _ => {
                         // Vote, Lock, Advance
                         self.ss_try_resolve().await;
@@ -342,8 +338,8 @@ impl OptimisticCompiler {
         }
         if let Some(rc) = self.recovery_certificates.pop_front() {
             debug!("Sending RC to mempool wrapper {:?}", rc);
-            self.tx_cert
-                .send(rc.clone())
+            self.tx_mempool_wrapper_cmd
+                .send(MempoolCmd::AddCert(rc.clone()))
                 .await
                 .expect("Failed to send recovery certificate to mempool wrapper");
             self.rc_inputted = true;
@@ -361,11 +357,11 @@ impl OptimisticCompiler {
         // Clean up aggregator
         self.aggregator.cleanup_recovery_votes(&self.era);
 
-        self.ss_try_resolve().await;
         self.tx_stop_start
             .send(())
             .await
             .expect("Failed to start jolteon");
+        self.ss_try_resolve().await;
     }
 
     #[async_recursion]
@@ -397,10 +393,6 @@ impl OptimisticCompiler {
                 return self._ss_try_resolve();
             }
             for tx in &self.vaba_chain[self.l].payload {
-                // Ignore recovery certificates
-                if OptimisticCompiler::is_certificate(tx.to_vec()) {
-                    continue;
-                }
                 let x = tx.clone();
                 if !self.certified_on_time(x.clone()) {
                     // debug!(
@@ -420,10 +412,10 @@ impl OptimisticCompiler {
     }
 
     fn certified_on_time(&mut self, tx: Digest) -> bool {
-        for b in &self.main_chain {
-            if b.payload.contains(&tx) {
-                return true;
-            }
+        if self.main_txs.contains(&tx) {
+            // Transaction is certified. There is no need to store it any longer
+            self.main_txs.remove(&tx);
+            return true;
         }
         debug!(
             "Tx {} not yet in main chain. len main: {}. len vaba: {}",
@@ -450,7 +442,7 @@ impl OptimisticCompiler {
         // Check if the block contains a recovery certificate.
         if let Some(rc) = &self.vaba_chain[self.l].rc {
             if let Err(e) = rc.verify(&self.committee) {
-                // We got an invalid recovery certificate. Input the next one to the mempool wrapper.
+                // We got an invalid recovery certificate. Input the next recovery certificate to the mempool wrapper.
                 warn!("{}", e);
                 self.rc_inputted = false;
                 self.send_recovery_certificate().await;
@@ -530,15 +522,6 @@ impl OptimisticCompiler {
         }
     }
 
-    fn is_certificate(digest: Vec<u8>) -> bool {
-        for i in 0..16 {
-            if digest[i] != 2 {
-                return false;
-            }
-        }
-        true
-    }
-
     async fn forward_message(
         &mut self,
         message: ConsensusMessage,
@@ -584,7 +567,6 @@ impl OptimisticCompiler {
         loop {
             tokio::select! {
                 Some(message) = self.rx_main.recv() => self.handle_message(message).await,
-                Some(blocks) = self.rx_blocks.recv() => self.handle_blocks(blocks).await,
                 Some(event) = self.rx_event.recv() => self.handle_event(event).await
             }
         }

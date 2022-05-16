@@ -17,6 +17,7 @@ pub struct Parameters {
     pub ddos: bool,
     pub random_ddos: bool,
     pub exp: u64,
+    pub loopback: usize,
 }
 
 impl Default for Parameters {
@@ -30,6 +31,7 @@ impl Default for Parameters {
             ddos: false,
             random_ddos: false,
             exp: 1,
+            loopback: 10,
         }
     }
 }

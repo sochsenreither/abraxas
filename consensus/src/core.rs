@@ -4,8 +4,9 @@ use crate::error::{ConsensusError, ConsensusResult};
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
+use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{
-    Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, TC, RC,
+    Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, RC, TC,
 };
 use crate::optimistic_compiler::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
@@ -13,7 +14,7 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::VecDeque;
@@ -73,7 +74,6 @@ pub struct Core {
     synchronizer: Synchronizer,
     core_channel: Receiver<ConsensusMessage>,
     network_filter: Sender<FilterInput>,
-    commit_channel: Sender<Block>,
     round: SeqNumber,     // current round
     view: SeqNumber,      // current view
     height: HeightNumber, // current height
@@ -84,9 +84,8 @@ pub struct Core {
     timer: Timer,
     aggregator: Aggregator,
     tx_event: Sender<Event>,
-    tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
-    tx_blocks: Sender<VecDeque<Block>>,
     rx_stop_start: Receiver<()>,
+    tx_mempool_wrapper_cmd: Sender<MempoolCmd>,
 }
 
 impl Core {
@@ -102,11 +101,9 @@ impl Core {
         synchronizer: Synchronizer,
         core_channel: Receiver<ConsensusMessage>,
         network_filter: Sender<FilterInput>,
-        commit_channel: Sender<Block>,
         tx_event: Sender<Event>,
-        tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
-        tx_blocks: Sender<VecDeque<Block>>,
         rx_stop_start: Receiver<()>,
+        tx_mempool_wrapper_cmd: Sender<MempoolCmd>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
         let timer = Timer::new(parameters.timeout_delay);
@@ -120,7 +117,6 @@ impl Core {
             mempool_driver,
             synchronizer,
             network_filter,
-            commit_channel,
             core_channel,
             round: 1,
             view: 0,
@@ -132,9 +128,8 @@ impl Core {
             timer,
             aggregator,
             tx_event,
-            tx_wrapper,
-            tx_blocks,
             rx_stop_start,
+            tx_mempool_wrapper_cmd,
         }
     }
 
@@ -188,31 +183,31 @@ impl Core {
             parent = ancestor;
         }
         // Send the block that can be committed to the main protocol.
-        self.tx_blocks
-            .send(to_commit.clone())
+        self.tx_event
+            .send(Event::JolteonOut(to_commit.clone()))
             .await
             .expect("Failed to send blocks to the main protocol");
 
         // Save the last committed block.
         self.last_committed_round = block.round;
 
-        // Send all the newly committed blocks to the node's application layer.
-        while let Some(block) = to_commit.pop_back() {
-            // Performance computation takes place in the main protocol.
-            // if !block.payload.is_empty() {
-            //     info!("Committed {}", block);
+        // Performance computation takes place in the main protocol.
+        // // Send all the newly committed blocks to the node's application layer.
+        // while let Some(block) = to_commit.pop_back() {
+        //     if !block.payload.is_empty() {
+        //         info!("Committed {}", block);
 
-            //     #[cfg(feature = "benchmark")]
-            //     for x in &block.payload {
-            //         // NOTE: This log entry is used to compute performance.
-            //         info!("Committed B{}({})", block.round, base64::encode(x));
-            //     }
-            // }
-            debug!("Committed {:?}", block);
-            if let Err(e) = self.commit_channel.send(block).await {
-                warn!("Failed to send block through the commit channel: {}", e);
-            }
-        }
+        //         #[cfg(feature = "benchmark")]
+        //         for x in &block.payload {
+        //             // NOTE: This log entry is used to compute performance.
+        //             info!("Committed B{}({})", block.round, base64::encode(x));
+        //         }
+        //     }
+        //     debug!("Committed {:?}", block);
+        //     if let Err(e) = self.commit_channel.send(block).await {
+        //         warn!("Failed to send block through the commit channel: {}", e);
+        //     }
+        // }
         Ok(())
     }
     // -- End Safety Module --
@@ -344,10 +339,14 @@ impl Core {
         //     .await;
 
         let (tx_request, rx_request) = oneshot::channel();
-        self.tx_wrapper
-            .send((tx_request, SubProto::Jolteon))
+        self.tx_mempool_wrapper_cmd
+            .send(MempoolCmd::Request((tx_request, SubProto::Jolteon)))
             .await
             .expect("Unable to request payload");
+        // self.tx_wrapper
+        //     .send((tx_request, SubProto::Jolteon))
+        //     .await
+        //     .expect("Unable to request payload");
         let (payload, _) = rx_request.await.expect("unable to receive payload");
         debug!("Requested payload and got back {:?}", payload);
 

@@ -13,7 +13,7 @@ class ParseError(Exception):
 
 
 class LogParser:
-    def __init__(self, clients, nodes, faults, ddos, random_ddos):
+    def __init__(self, clients, nodes, faults, ddos, random_ddos, loopback):
         inputs = [clients, nodes]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -22,8 +22,9 @@ class LogParser:
         self.ddos = ddos
         self.random_ddos = random_ddos
         self.faults = faults
+        self.loopback = loopback
         self.committee_size = len(nodes) + faults
-        
+
         # Parse the clients logs.
         try:
             with Pool() as p:
@@ -207,6 +208,7 @@ class LogParser:
             f' DDOS attack: {self.ddos} \n'
             f' Random DDOS attack: {self.random_ddos} \n'
             f' Committee size: {self.committee_size} nodes\n'
+            f' Loopback: {self.loopback} \n'
             f' Input rate: {sum(self.rate):,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Faults: {self.faults} nodes\n'
@@ -238,7 +240,7 @@ class LogParser:
             f.write(self.result())
 
     @classmethod
-    def process(cls, directory, faults=0, ddos=False, random_ddos=False):
+    def process(cls, directory, faults=0, ddos=False, random_ddos=False, loopback=10):
         assert isinstance(directory, str)
 
         clients = []
@@ -250,4 +252,4 @@ class LogParser:
             with open(filename, 'r') as f:
                 nodes += [f.read()]
 
-        return cls(clients, nodes, faults=faults, ddos=ddos, random_ddos=random_ddos)
+        return cls(clients, nodes, faults=faults, ddos=ddos, random_ddos=random_ddos, loopback=loopback)

@@ -14,19 +14,22 @@ pub struct MempoolWrapper {
     digest_len: usize,
     payload_amount: usize,
     mempool_driver: MempoolDriver,
-    rx_request: Receiver<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>, // Request from sub protocols
-    rx_cert: Receiver<RC>, // Incoming recovery certificates
-    rx_remove: Receiver<Vec<Digest>>, // Transactions to remove from the sub protocol buffers
     rc: Option<RC>, // Currently hold recovery certificate. Note: there is only one to prevent the mempool wrapper from spamming vaba with recovery certificates
+    rx_command: Receiver<MempoolCmd>,
+}
+
+#[derive(Debug)]
+pub enum MempoolCmd {
+    Request((oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)),
+    Remove(Vec<Digest>),
+    AddCert(RC),
 }
 
 impl MempoolWrapper {
     pub fn new(
         max: usize,
         mempool_driver: MempoolDriver,
-        rx_request: Receiver<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
-        rx_cert: Receiver<RC>,
-        rx_remove: Receiver<Vec<Digest>>,
+        rx_command: Receiver<MempoolCmd>,
     ) -> Self {
         Self {
             buffer_jolteon: HashSet::new(),
@@ -35,10 +38,8 @@ impl MempoolWrapper {
             digest_len: Digest::default().size(),
             payload_amount: max / Digest::default().size(),
             mempool_driver,
-            rx_request,
-            rx_cert,
-            rx_remove,
             rc: None,
+            rx_command,
         }
     }
 
@@ -60,7 +61,11 @@ impl MempoolWrapper {
 
     // Handles transaction requests from the sub protocols. If there aren't any transactions already in the buffers
     // the mempool will be asked for transactions.
-    async fn handle_request(&mut self, answer: oneshot::Sender<(Vec<Digest>, Option<RC>)>, proto: SubProto) {
+    async fn handle_request(
+        &mut self,
+        answer: oneshot::Sender<(Vec<Digest>, Option<RC>)>,
+        proto: SubProto,
+    ) {
         let (digests, rc) = match proto {
             SubProto::Jolteon => {
                 if self.buffer_jolteon.len() < self.payload_amount {
@@ -103,7 +108,6 @@ impl MempoolWrapper {
         answer.send((digests, rc)).expect("Failed to send");
     }
 
-
     fn remove_tx(&mut self, txs: Vec<Digest>) {
         debug!("Removing txs {:?}", &txs);
         for tx in txs {
@@ -115,9 +119,13 @@ impl MempoolWrapper {
     pub async fn run(&mut self) {
         loop {
             tokio::select! {
-                Some((answer, proto)) = self.rx_request.recv() => self.handle_request(answer, proto).await,
-                Some(txs) = self.rx_remove.recv() => self.remove_tx(txs),
-                Some(rc) = self.rx_cert.recv() => self.rc = Some(rc),
+                Some(cmd) = self.rx_command.recv() => {
+                    match cmd {
+                        MempoolCmd::Request((answer, proto)) => self.handle_request(answer, proto).await,
+                        MempoolCmd::Remove(txs) => self.remove_tx(txs),
+                        MempoolCmd::AddCert(rc) => self.rc = Some(rc),
+                    }
+                }
             }
         }
     }

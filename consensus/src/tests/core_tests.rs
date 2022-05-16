@@ -11,12 +11,10 @@ async fn core(
 ) -> (
     Sender<ConsensusMessage>,
     Receiver<FilterInput>,
-    Receiver<Block>,
 ) {
     let (tx_core, rx_core) = channel(1);
     let (tx_network, rx_network) = channel(3);
     let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
-    let (tx_commit, rx_commit) = channel(1);
 
     let parameters = Parameters {
         timeout_delay: 100,
@@ -40,9 +38,8 @@ async fn core(
     .await;
     // TODO: fix
     let (tx_event, _) = channel(1);
-    let (tx_wrapper, _) = channel(1);
-    let (tx_block, _) = channel(1);
     let (_, rx_stop_start) = channel(1);
+    let (tx_mempool_wrapper_cmd, _) = channel(1);
     let mut core = Core::new(
         name,
         committee(),
@@ -54,16 +51,14 @@ async fn core(
         synchronizer,
         /* core_channel */ rx_core,
         /* network_channel */ tx_network,
-        /* commit_channel */ tx_commit,
         tx_event,
-        tx_wrapper,
-        tx_block,
         rx_stop_start,
+        tx_mempool_wrapper_cmd,
     );
     tokio::spawn(async move {
         core.run().await;
     });
-    (tx_core, rx_network, rx_commit)
+    (tx_core, rx_network)
 }
 
 fn leader_keys(round: SeqNumber) -> (PublicKey, SecretKey) {
@@ -93,7 +88,7 @@ async fn handle_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (tx_core, mut rx_network, _rx_commit) = core(public_key, secret_key, store_path).await;
+    let (tx_core, mut rx_network) = core(public_key, secret_key, store_path).await;
 
     // Send a block to the core.
     let message = ConsensusMessage::ProposeJolteon(block.clone());
@@ -155,7 +150,7 @@ async fn generate_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_network, _rx_commit) =
+    let (tx_core, mut rx_network) =
         core(next_leader, next_leader_key, store_path).await;
 
     // Send all votes to the core.
@@ -192,19 +187,13 @@ async fn commit_block() {
     // Run a core instance.
     let store_path = ".db_test_commit_block";
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (tx_core, _rx_network, mut rx_commit) = core(public_key, secret_key, store_path).await;
+    let (tx_core, _rx_network) = core(public_key, secret_key, store_path).await;
 
     // Send a the blocks to the core.
     let committed = chain[0].clone();
     for block in chain {
         let message = ConsensusMessage::ProposeJolteon(block);
         tx_core.send(message).await.unwrap();
-    }
-
-    // Ensure the core commits the head.
-    match rx_commit.recv().await {
-        Some(b) => assert_eq!(b, committed),
-        _ => assert!(false),
     }
 }
 
@@ -216,7 +205,7 @@ async fn local_timeout_round() {
 
     // Run a core instance.
     let store_path = ".db_test_local_timeout_round";
-    let (_tx_core, mut rx_network, _rx_commit) = core(public_key, secret_key, store_path).await;
+    let (_tx_core, mut rx_network) = core(public_key, secret_key, store_path).await;
 
     // Ensure the following operation happen in the right order.
     match rx_network.recv().await {

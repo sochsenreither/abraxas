@@ -5,7 +5,8 @@ use crate::error::{ConsensusError, ConsensusResult};
 use crate::filter::FilterInput;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Timeout, Vote, QC, RC, TC};
+use crate::mempool_wrapper::MempoolCmd;
+use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Timeout, Vote, QC, TC};
 use crate::optimistic_compiler::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -34,7 +35,6 @@ pub struct Fallback {
     synchronizer: Synchronizer,
     core_channel: Receiver<ConsensusMessage>,
     network_filter: Sender<FilterInput>,
-    commit_channel: Sender<Block>,
     round: SeqNumber,     // current round
     view: SeqNumber,      // current view
     height: HeightNumber, // current height, 0 not in fallback, 1 or 2 in fallback
@@ -63,7 +63,7 @@ pub struct Fallback {
     timer: Timer,
     aggregator: Aggregator,
     tx_event: Sender<Event>,
-    tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
+    tx_mempool_wrapper_cmd: Sender<MempoolCmd>,
 }
 
 impl Fallback {
@@ -80,10 +80,9 @@ impl Fallback {
         synchronizer: Synchronizer,
         core_channel: Receiver<ConsensusMessage>,
         network_filter: Sender<FilterInput>,
-        commit_channel: Sender<Block>,
         is_vaba: bool,
         tx_event: Sender<Event>,
-        tx_wrapper: Sender<(oneshot::Sender<(Vec<Digest>, Option<RC>)>, SubProto)>,
+        tx_mempool_wrapper_cmd: Sender<MempoolCmd>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
         let timer = Timer::new(parameters.timeout_delay);
@@ -106,7 +105,6 @@ impl Fallback {
             mempool_driver,
             synchronizer,
             network_filter,
-            commit_channel,
             core_channel,
             round: 1,
             view: 0,
@@ -136,7 +134,7 @@ impl Fallback {
             timer,
             aggregator,
             tx_event,
-            tx_wrapper,
+            tx_mempool_wrapper_cmd,
         }
     }
 
@@ -473,12 +471,15 @@ impl Fallback {
         coin: Option<RandomCoin>,
         qc: QC,
     ) -> ConsensusResult<()> {
-
         let (tx_request, rx_request) = oneshot::channel();
-        self.tx_wrapper
-            .send((tx_request, SubProto::Vaba))
+        self.tx_mempool_wrapper_cmd
+            .send(MempoolCmd::Request((tx_request, SubProto::Vaba)))
             .await
             .expect("Unable to request payload");
+        // self.tx_wrapper
+        //     .send((tx_request, SubProto::Vaba))
+        //     .await
+        //     .expect("Unable to request payload");
         let (payload, rc) = rx_request.await.expect("unable to receive payload");
         debug!("Requested payload and got back {:?}", payload);
         let block = Block::new(
@@ -675,10 +676,10 @@ impl Fallback {
                 self.commit_ancestors(&b0).await?;
 
                 self.last_committed_round = b0.round;
-                debug!("Committed {:?}", b0);
-                if let Err(e) = self.commit_channel.send(b0.clone()).await {
-                    warn!("Failed to send block through the commit channel: {}", e);
-                }
+                // debug!("Committed {:?}", b0);
+                // if let Err(e) = self.commit_channel.send(b0.clone()).await {
+                //     warn!("Failed to send block through the commit channel: {}", e);
+                // }
             }
         }
 
