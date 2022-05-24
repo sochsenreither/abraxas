@@ -60,9 +60,9 @@ pub struct OptimisticCompiler {
     tx_jolteon: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
     tx_vaba: Sender<ConsensusMessage>, // Channel for forwarding messages to sub protocols.
     tx_mempool_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
-    tx_stop_start: Sender<()>,                  // Used to stop and start jolteon.
-    recovery_certificates: VecDeque<RC>,        // Recovery certificates for the current era.
-    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
+    tx_stop_start: Sender<()>, // Used to stop and start jolteon.
+    recovery_certificates: VecDeque<RC>, // Recovery certificates for the current era.
+    rc_inputted: bool,         // True if a recovery certificate was sent to the mempool wrapper.
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
     tx_application_layer: Sender<Block>,
     store: Store,
@@ -286,10 +286,20 @@ impl OptimisticCompiler {
             State::Steady => {
                 match event {
                     Event::VabaOut(block) => {
+                        debug!(
+                            "VabaOut. Main len: {} Vaba len: {}",
+                            self.main_chain_len, self.vaba_chain_len
+                        );
                         self.store_vaba_block(&block).await;
                         self.ss_try_resolve().await;
                     }
-                    Event::JolteonOut(blocks) => self.handle_blocks(blocks).await,
+                    Event::JolteonOut(blocks) => {
+                        debug!(
+                            "JolteonOut. Main len: {} Vaba len: {}",
+                            self.main_chain_len, self.vaba_chain_len
+                        );
+                        self.handle_blocks(blocks).await
+                    }
                     _ => {
                         // Vote, Lock, Advance
                         self.ss_try_resolve().await;
@@ -298,6 +308,10 @@ impl OptimisticCompiler {
             }
             State::Recovery => match event {
                 Event::VabaOut(block) => {
+                    debug!(
+                        "VabaOut. Main len: {} Vaba len: {}",
+                        self.main_chain_len, self.vaba_chain_len
+                    );
                     self.store_vaba_block(&block).await;
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
