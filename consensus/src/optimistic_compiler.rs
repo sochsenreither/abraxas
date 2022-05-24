@@ -560,10 +560,11 @@ impl OptimisticCompiler {
             ConsensusMessage::SyncRequestJolteon(_, _) => self.tx_jolteon.send(message).await,
             ConsensusMessage::SyncReplyJolteon(_) => self.tx_jolteon.send(message).await,
 
-            // TODO: This currently gets ignored
-            ConsensusMessage::LoopBack(_) => {
-                //tx_jolteon.send(message).await.unwrap()
-                //tx_vaba.send(message).await.unwrap()
+            ConsensusMessage::LoopBack(block) => {
+                match block.fallback {
+                    0 => self.tx_jolteon.send(ConsensusMessage::LoopBack(block.clone())).await.unwrap(),
+                    _ => self.tx_vaba.send(ConsensusMessage::LoopBack(block.clone())).await.unwrap(),
+                }
                 Ok(())
             }
 
