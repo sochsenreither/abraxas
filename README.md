@@ -1,4 +1,4 @@
-# Ditto
+# Optimistic Compiler
 
 [![build status](https://img.shields.io/github/workflow/status/danielxiangzl/hotstuff/Build/main?style=flat-square&logo=github)](https://github.com/danielxiangzl/hotstuff/actions)
 [![test status](https://img.shields.io/github/workflow/status/danielxiangzl/hotstuff/Tests/main?style=flat-square&logo=github&label=tests)](https://github.com/danielxiangzl/hotstuff/actions)
