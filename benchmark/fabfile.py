@@ -12,11 +12,11 @@ from aws.remote import Bench, BenchError
 def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
-        'nodes': 5,
+        'nodes': 4,
         'rate': 10_000,
         'tx_size': 512,
         'faults': 0,
-        'duration': 20,
+        'duration': 6,
     }
     node_params = {
         'consensus': {
@@ -28,7 +28,7 @@ def local(ctx):
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': False, # True for random DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 15 # multiplicative factor for exponential fallback
+            'loopback': 15
         },
         'mempool': {
             'queue_capacity': 10_000,
@@ -106,7 +106,7 @@ def remote(ctx):
         'rate': [40_000],
         'tx_size': 512,
         'faults': 0,
-        'duration': 20,
+        'duration': 100,
         'runs': 1,
     }
     node_params = {
@@ -116,10 +116,10 @@ def remote(ctx):
             'max_payload_size': 1_000,
             'min_block_delay': 100,
             'network_delay': 20_000, # message delay on the leaders' proposals during DDoS
-            'ddos': False, # True for DDoS attack on the leader, False otherwise
-            'random_ddos': False, # True for DDoS attack on the leader, False otherwise
+            'ddos': True, # True for DDoS attack on the leader, False otherwise
+            'random_ddos': True, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 15  # multiplicative factor for exponential fallback
+            'loopback': 15
         },
         'mempool': {
             'queue_capacity': 100_000,
