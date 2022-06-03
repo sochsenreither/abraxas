@@ -17,6 +17,7 @@ class Key:
             data = load(f)
         return cls(data['name'], data['secret'])
 
+
 class TSSKey:
     def __init__(self, id, name, secret):
         self.id = id
@@ -29,6 +30,7 @@ class TSSKey:
         with open(filename, 'r') as f:
             data = load(f)
         return cls(data['id'], data['name'], data['secret'])
+
 
 class Committee:
     def __init__(self, names, ids, consensus_addr, front_addr, mempool_addr):
@@ -87,7 +89,8 @@ class Committee:
 
 class LocalCommittee(Committee):
     def __init__(self, names, ids, port):
-        assert isinstance(names, list) and all(isinstance(x, str) for x in names)
+        assert isinstance(names, list) and all(
+            isinstance(x, str) for x in names)
         assert isinstance(port, int)
         size = len(names)
         consensus = [f'127.0.0.1:{port + i}' for i in range(size)]
@@ -124,9 +127,6 @@ class NodeParameters:
         self.ddos = json['consensus']['ddos']
         self.random_ddos = json['consensus']['random_ddos']
         self.loopback = json['consensus']['loopback']
-        if self.random_ddos:
-            self.ddos = True
-
         self.json = json
 
     def print(self, filename):
