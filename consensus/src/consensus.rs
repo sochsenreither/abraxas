@@ -48,6 +48,14 @@ impl Consensus {
             "Consensus min block delay set to {} ms",
             parameters.min_block_delay
         );
+        info!(
+            "ddos {}",
+            parameters.ddos
+        );
+        info!(
+            "random ddos {}",
+            parameters.random_ddos
+        );
 
         let (tx_network, rx_network) = channel(10000);
         let (tx_filter, rx_filter) = channel(10000);

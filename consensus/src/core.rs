@@ -601,7 +601,12 @@ impl Core {
                     }
                 },
                 Some(_) = self.rx_stop_start.recv() => self.handle_stop_start().await,
-                () = &mut self.timer => Ok(()),
+                () = &mut self.timer => {
+                    debug!("Timeout in jolteon!!");
+                    self.timer.reset();
+                    // self.local_timeout_round().await
+                    Ok(())
+                },
                 else => break,
             };
             match result {
