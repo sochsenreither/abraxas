@@ -45,7 +45,7 @@ def local(ctx):
 
 
 @task
-def create(ctx, nodes=1):
+def create(ctx, nodes=2):
     ''' Create a testbed'''
     try:
         InstanceManager.make().create_instances(nodes)
@@ -102,11 +102,11 @@ def install(ctx):
 def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'nodes': [5],
-        'rate': [40_000],
+        'nodes': [10],
+        'rate': [60_000],
         'tx_size': 512,
         'faults': 0,
-        'duration': 100,
+        'duration': 150,
         'runs': 1,
     }
     node_params = {
@@ -116,8 +116,8 @@ def remote(ctx):
             'max_payload_size': 1_000,
             'min_block_delay': 100,
             'network_delay': 20_000, # message delay on the leaders' proposals during DDoS
-            'ddos': True, # True for DDoS attack on the leader, False otherwise
-            'random_ddos': True, # True for DDoS attack on the leader, False otherwise
+            'ddos': False, # True for DDoS attack on the leader, False otherwise
+            'random_ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
             'loopback': 15
         },
