@@ -564,7 +564,6 @@ impl Fallback {
                 // TODO: don't cleanup? only when block is committed to main chain?
                 self.mempool_driver.cleanup_async(&current_block).await;
             }
-            debug!("Committed {}", current_block);
             let parent = match self.synchronizer.get_parent_block(&current_block).await? {
                 Some(b) => b,
                 None => {
