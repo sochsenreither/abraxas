@@ -332,7 +332,6 @@ impl OptimisticCompiler {
             self.main_chain_len += 1;
             self.store_block(&block).await;
             // Send all the newly committed blocks to the node's application layer.
-            debug!("Committed {:?}", block);
             if let Err(e) = self.tx_application_layer.send(block).await {
                 warn!("Failed to send block through the commit channel: {}", e);
             }
@@ -353,7 +352,7 @@ impl OptimisticCompiler {
                         self.ss_try_resolve().await;
                     }
                     Event::JolteonOut(blocks) => {
-                        debug!(
+                        info!(
                             "JolteonOut. Main len: {} Vaba len: {}",
                             self.main_chain_len, self.vaba_chain_len
                         );
@@ -494,7 +493,7 @@ impl OptimisticCompiler {
     fn certified_on_time(&mut self, tx: Digest) -> bool {
         if self.main_txs.contains(&tx) {
             // Transaction is certified. There is no need to store it any longer
-            self.main_txs.remove(&tx);
+            //self.main_txs.remove(&tx);
             return true;
         }
         debug!(
@@ -532,7 +531,17 @@ impl OptimisticCompiler {
             if self.main_chain_len < self.vaba_chain_len {
                 let mut queue = VecDeque::new();
                 for i in self.main_chain_len..self.vaba_chain_len {
-                    let block = self.get_vaba_block(i).await;
+                    let mut block = self.get_vaba_block(i).await;
+                    let mut payload = Vec::new();
+                    // Don't commit already committed transactions.
+                    for tx in block.payload {
+                        if self.main_txs.contains(&tx) {
+                            debug!("double commit!");
+                        } else {
+                            payload.push(tx.clone());
+                        }
+                    }
+                    block.payload = payload;
                     queue.push_back(block);
                 }
                 debug!(

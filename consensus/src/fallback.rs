@@ -366,7 +366,7 @@ impl Fallback {
         debug!("Processing {:?}", timeout);
         // TODO: is this a bug? additional condition in if:
         // || (timeout.seq == self.view && self.fallback == 1)
-        if timeout.seq < self.view || (timeout.seq == self.view && self.fallback == 1) {
+        if timeout.seq < self.view {
             debug!(
                 "RETURNING. Timeout view {}, self view {}, fallback {}",
                 timeout.seq, self.view, self.fallback

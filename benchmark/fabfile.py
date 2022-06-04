@@ -12,7 +12,7 @@ from aws.remote import Bench, BenchError
 def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
-        'nodes': 10,
+        'nodes': 4,
         'rate': 10_000,
         'tx_size': 512,
         'faults': 0,
@@ -26,7 +26,7 @@ def local(ctx):
             'min_block_delay': 0,
             'network_delay': 2000, # message delay on the leaders' proposals during DDoS
             'ddos': False, # True for DDoS attack on the leader, False otherwise
-            'random_ddos': True, # True for random DDoS attack on the leader, False otherwise
+            'random_ddos': False, # True for random DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
             'loopback': 20
         },
