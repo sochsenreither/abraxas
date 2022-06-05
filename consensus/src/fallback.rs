@@ -481,7 +481,10 @@ impl Fallback {
         //     .await
         //     .expect("Unable to request payload");
         let (payload, rc) = rx_request.await.expect("unable to receive payload");
-        debug!("Requested payload and got back {:?}", payload);
+        debug!(
+            "Requested payload and got back {:?} and RC {:?}",
+            payload, rc
+        );
         let block = Block::new(
             qc.clone(),
             tc,
@@ -551,6 +554,11 @@ impl Fallback {
     async fn commit_ancestors(&mut self, block: &Block) -> ConsensusResult<()> {
         let mut current_block = block.clone();
         while current_block.round > self.last_committed_round {
+            // VabaOut event
+            self.tx_event
+                .send(Event::VabaOut(current_block.clone()))
+                .await
+                .unwrap();
             if !current_block.payload.is_empty() {
                 // Performance computation takes place in the main protocol.
                 // info!("Committed {}", current_block);
@@ -681,12 +689,6 @@ impl Fallback {
                 // }
             }
         }
-
-        // VabaOut event
-        self.tx_event
-            .send(Event::VabaOut(block.clone()))
-            .await
-            .unwrap();
 
         // debug!("{:?}", self.print_chain(block).await?);
 

@@ -103,6 +103,7 @@ impl MempoolWrapper {
             }
         };
         if let Some(_) = rc {
+            debug!("Sending RC to vaba!");
             self.rc = None;
         }
         answer.send((digests, rc)).expect("Failed to send");

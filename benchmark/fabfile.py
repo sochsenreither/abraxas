@@ -16,7 +16,7 @@ def local(ctx):
         'rate': 10_000,
         'tx_size': 512,
         'faults': 0,
-        'duration': 15,
+        'duration': 10,
     }
     node_params = {
         'consensus': {

@@ -110,6 +110,7 @@ pub struct OptimisticCompiler {
     main_chain_len: usize,
     vaba_chain_len: usize,
     vaba_chain: Vec<Vec<u8>>,
+    last_synchronized: usize, // Last Index of vaba chain that got added to the main chain.
     main_txs: HashSet<Digest>, // Contains transactions in the main chain that are not yet certified.
     rx_rec: Receiver<ConsensusMessage>, // Incoming recovery votes/certificates.
     rx_event: Receiver<Event>, // Events from sub protocols.
@@ -248,6 +249,7 @@ impl OptimisticCompiler {
             main_chain_len: 0,
             vaba_chain_len: 0,
             vaba_chain: Vec::new(),
+            last_synchronized: 0,
             main_txs: HashSet::new(),
             rx_rec,
             rx_event,
@@ -307,10 +309,10 @@ impl OptimisticCompiler {
 
     async fn handle_blocks(&mut self, mut blocks: VecDeque<Block>) {
         // Received block(s) that can be appended to the main chain.
-        debug!(
-            "Received block(s): {:?}. Len main {} Len vaba {}",
-            blocks, self.main_chain_len, self.vaba_chain_len
-        );
+        // debug!(
+        //     "Received block(s): {:?}. Len main {} Len vaba {}",
+        //     blocks, self.main_chain_len, self.vaba_chain_len
+        // );
         while let Some(block) = blocks.pop_back() {
             if !block.payload.is_empty() {
                 // Remove transactions from the mempool wrapper
@@ -319,7 +321,7 @@ impl OptimisticCompiler {
                     .await
                     .expect("Failed to send transactions to mempool wrapper");
 
-                info!("Committed {}", block);
+                info!("Committed {:?}", block);
 
                 for x in &block.payload {
                     self.main_txs.insert(x.clone());
@@ -345,16 +347,20 @@ impl OptimisticCompiler {
                 match event {
                     Event::VabaOut(block) => {
                         debug!(
-                            "VabaOut. Main len: {} Vaba len: {}",
-                            self.main_chain_len, self.vaba_chain_len
+                            "VabaOut. Main len: {} Vaba len: {}, {:?}",
+                            self.main_chain_len,
+                            self.vaba_chain_len,
+                            block.clone()
                         );
                         self.store_vaba_block(&block).await;
                         self.ss_try_resolve().await;
                     }
                     Event::JolteonOut(blocks) => {
                         info!(
-                            "JolteonOut. Main len: {} Vaba len: {}",
-                            self.main_chain_len, self.vaba_chain_len
+                            "JolteonOut {}. Main len: {} Vaba len: {}",
+                            blocks.len(),
+                            self.main_chain_len,
+                            self.vaba_chain_len
                         );
                         self.handle_blocks(blocks).await
                     }
@@ -367,8 +373,10 @@ impl OptimisticCompiler {
             State::Recovery => match event {
                 Event::VabaOut(block) => {
                     debug!(
-                        "VabaOut. Main len: {} Vaba len: {}",
-                        self.main_chain_len, self.vaba_chain_len
+                        "VabaOut. Main len: {} Vaba len: {}, {:?}",
+                        self.main_chain_len,
+                        self.vaba_chain_len,
+                        block.clone()
                     );
                     self.store_vaba_block(&block).await;
                     // We received a qc, so we need to call rs_try_vote
@@ -418,7 +426,10 @@ impl OptimisticCompiler {
         if self.rc_inputted {
             return;
         }
-        if let Some(rc) = self.recovery_certificates.pop_front() {
+        while let Some(rc) = self.recovery_certificates.pop_front() {
+            if rc.era < self.era {
+                continue;
+            }
             debug!("Sending RC to mempool wrapper {:?}", rc);
             self.tx_mempool_cmd
                 .send(MempoolCmd::AddCert(rc.clone()))
@@ -493,7 +504,7 @@ impl OptimisticCompiler {
     fn certified_on_time(&mut self, tx: Digest) -> bool {
         if self.main_txs.contains(&tx) {
             // Transaction is certified. There is no need to store it any longer
-            //self.main_txs.remove(&tx);
+            self.main_txs.remove(&tx);
             return true;
         }
         debug!(
@@ -528,22 +539,14 @@ impl OptimisticCompiler {
                 return self._rs_try_resolve().await;
             }
             // We got a valid recovery certificate. Set blocks, increment l and return true
+            debug!("Valid RC received {:?}", rc);
             if self.main_chain_len < self.vaba_chain_len {
                 let mut queue = VecDeque::new();
-                for i in self.main_chain_len..self.vaba_chain_len {
-                    let mut block = self.get_vaba_block(i).await;
-                    let mut payload = Vec::new();
-                    // Don't commit already committed transactions.
-                    for tx in block.payload {
-                        if self.main_txs.contains(&tx) {
-                            debug!("double commit!");
-                        } else {
-                            payload.push(tx.clone());
-                        }
-                    }
-                    block.payload = payload;
+                for i in self.last_synchronized..self.vaba_chain_len {
+                    let block = self.get_vaba_block(i).await;
                     queue.push_back(block);
                 }
+                self.last_synchronized = self.vaba_chain_len - 1;
                 debug!(
                     "Bulk transaction. Adding {} blocks. main {} vaba {}",
                     queue.len(),
@@ -557,6 +560,7 @@ impl OptimisticCompiler {
         } else {
             // There wasn't any recovery certificate in the block. We send a certificate to the mempool wrapper, so that
             // the next vaba block will include a certificate.
+            debug!("NO RC in block {:?}", block);
             self.rc_inputted = false;
             self.send_recovery_certificate().await;
             self.l += 1;
@@ -611,56 +615,6 @@ impl OptimisticCompiler {
             }
         }
     }
-
-    // async fn forward_message(
-    //     &mut self,
-    //     message: ConsensusMessage,
-    // ) -> Result<(), SendError<ConsensusMessage>> {
-    //     match message {
-    //         // Messages used by jolteon
-    //         ConsensusMessage::ProposeJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::VoteJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::TimeoutJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::TCJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::SignedQCJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::RandomnessShareJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::RandomCoinJolteon(_) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::SyncRequestJolteon(_, _) => self.tx_jolteon.send(message).await,
-    //         ConsensusMessage::SyncReplyJolteon(_) => self.tx_jolteon.send(message).await,
-
-    //         ConsensusMessage::LoopBack(block) => {
-    //             match block.fallback {
-    //                 0 => self
-    //                     .tx_jolteon
-    //                     .send(ConsensusMessage::LoopBack(block.clone()))
-    //                     .await
-    //                     .unwrap(),
-    //                 _ => self
-    //                     .tx_vaba
-    //                     .send(ConsensusMessage::LoopBack(block.clone()))
-    //                     .await
-    //                     .unwrap(),
-    //             }
-    //             Ok(())
-    //         }
-
-    //         // Messages used by vaba
-    //         ConsensusMessage::ProposeVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::VoteVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::TimeoutVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::TCVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::SignedQCVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::RandomnessShareVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::RandomCoinVaba(_) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::SyncRequestVaba(_, _) => self.tx_vaba.send(message).await,
-    //         ConsensusMessage::SyncReplyVaba(_) => self.tx_vaba.send(message).await,
-
-    //         _ => {
-    //             warn!("Wrong message type {:?}", message);
-    //             Ok(())
-    //         }
-    //     }
-    // }
 
     pub async fn run(&mut self) {
         loop {

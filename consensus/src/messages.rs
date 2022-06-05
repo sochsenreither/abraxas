@@ -27,7 +27,7 @@ pub struct Block {
     pub fallback: Bool,       // 1 if async block; 0 if sync block
     pub payload: Vec<Digest>,
     pub signature: Signature,
-    pub rc: Option<RC>
+    pub rc: Option<RC>,
 }
 
 impl Block {
@@ -160,7 +160,7 @@ impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B(author {}, view {}, round {}, height {}, qc {:?}, payload_len {}, fallback {})",
+            "{}: B(author {}, view {}, round {}, height {}, qc {:?}, payload_len {}, fallback {}, RC {:?})",
             self.digest(),
             self.author,
             self.view,
@@ -168,7 +168,8 @@ impl fmt::Debug for Block {
             self.height,
             self.qc,
             self.payload.iter().map(|x| x.size()).sum::<usize>(),
-            self.fallback
+            self.fallback,
+            self.rc
         )
     }
 }
@@ -698,7 +699,8 @@ impl RecoveryVote {
     }
 
     pub fn verify(&self) -> ConsensusResult<()> {
-        self.signature_share.verify(&self.qc.digest(), &self.author)?;
+        self.signature_share
+            .verify(&self.qc.digest(), &self.author)?;
         Ok(())
     }
 }
@@ -717,7 +719,7 @@ impl fmt::Debug for RecoveryVote {
 pub struct RC {
     pub era: SeqNumber,
     pub index: SeqNumber,
-    pub recovery_votes: Vec<RecoveryVote>
+    pub recovery_votes: Vec<RecoveryVote>,
 }
 
 impl RC {
@@ -731,7 +733,10 @@ impl RC {
                 ConsensusError::AuthorityReuseinRC(rv.author)
             );
             let voting_rights = committee.stake(&rv.author);
-            ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(rv.author));
+            ensure!(
+                voting_rights > 0,
+                ConsensusError::UnknownAuthority(rv.author)
+            );
             used.insert(&rv.author);
             weight += voting_rights;
         }
