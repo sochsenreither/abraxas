@@ -13,7 +13,7 @@ use crate::{MempoolWrapper, SeqNumber};
 use async_recursion::async_recursion;
 use crypto::{Digest, Hash, PublicKey, SignatureService};
 use log::{debug, info, warn};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use store::Store;
 use threshold_crypto::PublicKeySet;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -117,7 +117,8 @@ pub struct OptimisticCompiler {
     tx_mempool_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
     tx_stop_start: Sender<()>, // Used to stop and start jolteon.
     recovery_certificates: VecDeque<RC>, // Recovery certificates for the current era.
-    rc_inputted: bool,         // True if a recovery certificate was sent to the mempool wrapper.
+    recovery_certificates_new: HashMap<usize, VecDeque<RC>>,
+    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
     tx_application_layer: Sender<Block>,
     store: Store,
@@ -256,6 +257,7 @@ impl OptimisticCompiler {
             tx_mempool_cmd: tx_mempool_wrapper_cmd,
             tx_stop_start,
             recovery_certificates: VecDeque::new(),
+            recovery_certificates_new: HashMap::new(),
             rc_inputted: false,
             rc_received: HashSet::new(),
             tx_application_layer: tx_commit.clone(),
@@ -405,7 +407,11 @@ impl OptimisticCompiler {
         // {
         //     warn!("{}", e);
         // }
-        self.recovery_certificates.push_back(rc.clone());
+        // self.recovery_certificates.push_back(rc.clone());
+        self.recovery_certificates_new
+            .entry(rc.era as usize)
+            .or_insert_with(VecDeque::new)
+            .push_back(rc.clone());
         self.send_recovery_certificate().await;
     }
 
@@ -426,16 +432,31 @@ impl OptimisticCompiler {
         if self.rc_inputted {
             return;
         }
-        while let Some(rc) = self.recovery_certificates.pop_front() {
-            if rc.era < self.era {
-                continue;
-            }
+        // while let Some(rc) = self.recovery_certificates.pop_front() {
+        //     if rc.era < self.era {
+        //         continue;
+        //     }
+        //     debug!("Sending RC to mempool wrapper {:?}", rc);
+        //     self.tx_mempool_cmd
+        //         .send(MempoolCmd::AddCert(rc.clone()))
+        //         .await
+        //         .expect("Failed to send recovery certificate to mempool wrapper");
+        //     self.rc_inputted = true;
+        // }
+        let m = self
+            .recovery_certificates_new
+            .entry(self.era as usize)
+            .or_insert_with(VecDeque::new);
+        if let Some(rc) = m.pop_front() {
             debug!("Sending RC to mempool wrapper {:?}", rc);
             self.tx_mempool_cmd
                 .send(MempoolCmd::AddCert(rc.clone()))
                 .await
                 .expect("Failed to send recovery certificate to mempool wrapper");
             self.rc_inputted = true;
+            if m.is_empty() {
+                m.push_back(rc);
+            }
         }
     }
 
@@ -493,12 +514,10 @@ impl OptimisticCompiler {
             if !self.certified_on_time(x.clone()) {
                 self.l += 1;
                 return true;
-            } else {
-                self.l += 1;
-                return self._ss_try_resolve().await;
             }
         }
-        false
+        self.l += 1;
+        return self._ss_try_resolve().await;
     }
 
     fn certified_on_time(&mut self, tx: Digest) -> bool {
@@ -508,8 +527,8 @@ impl OptimisticCompiler {
             return true;
         }
         debug!(
-            "Tx {} not yet in main chain. len main: {}. len vaba: {}",
-            tx, self.main_chain_len, self.vaba_chain_len
+            "Tx {} not yet in main chain. len main: {}. len vaba: {} l: {} loopback: {}",
+            tx, self.main_chain_len, self.vaba_chain_len, self.l, self.loopback
         );
         false
     }
