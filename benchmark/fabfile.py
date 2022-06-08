@@ -119,7 +119,7 @@ def remote(ctx):
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 15
+            'loopback': 10
         },
         'mempool': {
             'queue_capacity': 100_000,

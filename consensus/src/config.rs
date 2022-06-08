@@ -31,7 +31,7 @@ impl Default for Parameters {
             ddos: false,
             random_ddos: false,
             exp: 1,
-            loopback: 10,
+            loopback: 20,
         }
     }
 }
