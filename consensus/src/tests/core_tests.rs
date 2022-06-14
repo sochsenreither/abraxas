@@ -1,5 +1,8 @@
 use super::*;
-use crate::common::{chain, committee, keys, MockMempool};
+use crate::{
+    common::{chain, committee, keys, MockMempool},
+    MempoolWrapper,
+};
 use crypto::SecretKey;
 use std::fs;
 use tokio::sync::mpsc::channel;
@@ -8,10 +11,7 @@ async fn core(
     name: PublicKey,
     secret: SecretKey,
     store_path: &str,
-) -> (
-    Sender<ConsensusMessage>,
-    Receiver<FilterInput>,
-) {
+) -> (Sender<ConsensusMessage>, Receiver<FilterInput>) {
     let (tx_core, rx_core) = channel(1);
     let (tx_network, rx_network) = channel(3);
     let (tx_consensus_mempool, rx_consensus_mempool) = channel(1);
@@ -25,7 +25,7 @@ async fn core(
     let store = Store::new(store_path).unwrap();
     let leader_elector = LeaderElector::new(committee());
     MockMempool::run(rx_consensus_mempool);
-    let mempool_driver = MempoolDriver::new(tx_consensus_mempool);
+    let mempool_driver = MempoolDriver::new(tx_consensus_mempool.clone());
     let synchronizer = Synchronizer::new(
         name,
         committee(),
@@ -36,10 +36,10 @@ async fn core(
         SubProto::Jolteon,
     )
     .await;
-    // TODO: fix
-    let (tx_event, _) = channel(1);
+    let (tx_event, mut rx_event) = channel(1);
     let (_, rx_stop_start) = channel(1);
-    let (tx_mempool_wrapper_cmd, _) = channel(1);
+    let (tx_mempool_wrapper_cmd, rx_mempool_wrapper_cmd) = channel(1);
+    let mut mempool_wrapper = MempoolWrapper::new(100, mempool_driver, rx_mempool_wrapper_cmd);
     let mut core = Core::new(
         name,
         committee(),
@@ -47,7 +47,7 @@ async fn core(
         signature_service,
         store,
         leader_elector,
-        mempool_driver,
+        MempoolDriver::new(tx_consensus_mempool),
         synchronizer,
         /* core_channel */ rx_core,
         /* network_channel */ tx_network,
@@ -58,6 +58,10 @@ async fn core(
     tokio::spawn(async move {
         core.run().await;
     });
+    tokio::spawn(async move {
+        mempool_wrapper.run().await;
+    });
+    tokio::spawn(async move { while let Some(_e) = rx_event.recv().await {} });
     (tx_core, rx_network)
 }
 
@@ -150,8 +154,7 @@ async fn generate_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_network) =
-        core(next_leader, next_leader_key, store_path).await;
+    let (tx_core, mut rx_network) = core(next_leader, next_leader_key, store_path).await;
 
     // Send all votes to the core.
     for vote in votes.clone() {

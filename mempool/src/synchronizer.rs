@@ -113,9 +113,7 @@ impl Synchronizer {
                                     let _ = requests.remove(x);
                                 }
                                 let message = ConsensusMessage::LoopBack(block);
-                                if let Err(e) = consensus_channel.send(message).await {
-                                    panic!("Failed to send message to consensus: {}", e);
-                                }
+                                consensus_channel.send(message).await.expect("Failed to send message to consensus");
                             },
                             Ok(None) => (),
                             Err(e) => error!("{}", e)

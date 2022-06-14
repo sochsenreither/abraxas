@@ -332,21 +332,12 @@ impl Core {
 
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
-        // Make a new block.
-        // let payload = self
-        //     .mempool_driver
-        //     .get(self.parameters.max_payload_size)
-        //     .await;
-
         let (tx_request, rx_request) = oneshot::channel();
         self.tx_mempool_wrapper_cmd
             .send(MempoolCmd::Request((tx_request, SubProto::Jolteon)))
             .await
             .expect("Unable to request payload");
-        // self.tx_wrapper
-        //     .send((tx_request, SubProto::Jolteon))
-        //     .await
-        //     .expect("Unable to request payload");
+
         let (payload, _) = rx_request.await.expect("unable to receive payload");
         debug!("Requested payload and got back {:?}", payload);
 
