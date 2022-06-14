@@ -116,9 +116,8 @@ pub struct OptimisticCompiler {
     rx_event: Receiver<Event>, // Events from sub protocols.
     tx_mempool_cmd: Sender<MempoolCmd>, // Channel for communication with the mempool wrapper.
     tx_stop_start: Sender<()>, // Used to stop and start jolteon.
-    recovery_certificates: VecDeque<RC>, // Recovery certificates for the current era.
-    recovery_certificates_new: HashMap<usize, VecDeque<RC>>,
-    rc_inputted: bool, // True if a recovery certificate was sent to the mempool wrapper.
+    recovery_certificates: HashMap<SeqNumber, VecDeque<RC>>, // Maps era -> recovery certificate.
+    rc_inputted: bool,         // True if a recovery certificate was sent to the mempool wrapper.
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
     tx_application_layer: Sender<Block>,
     store: Store,
@@ -256,8 +255,7 @@ impl OptimisticCompiler {
             rx_event,
             tx_mempool_cmd: tx_mempool_wrapper_cmd,
             tx_stop_start,
-            recovery_certificates: VecDeque::new(),
-            recovery_certificates_new: HashMap::new(),
+            recovery_certificates: HashMap::new(),
             rc_inputted: false,
             rc_received: HashSet::new(),
             tx_application_layer: tx_commit.clone(),
@@ -407,9 +405,8 @@ impl OptimisticCompiler {
         // {
         //     warn!("{}", e);
         // }
-        // self.recovery_certificates.push_back(rc.clone());
-        self.recovery_certificates_new
-            .entry(rc.era as usize)
+        self.recovery_certificates
+            .entry(rc.era)
             .or_insert_with(VecDeque::new)
             .push_back(rc.clone());
         self.send_recovery_certificate().await;
@@ -432,20 +429,9 @@ impl OptimisticCompiler {
         if self.rc_inputted {
             return;
         }
-        // while let Some(rc) = self.recovery_certificates.pop_front() {
-        //     if rc.era < self.era {
-        //         continue;
-        //     }
-        //     debug!("Sending RC to mempool wrapper {:?}", rc);
-        //     self.tx_mempool_cmd
-        //         .send(MempoolCmd::AddCert(rc.clone()))
-        //         .await
-        //         .expect("Failed to send recovery certificate to mempool wrapper");
-        //     self.rc_inputted = true;
-        // }
         let m = self
-            .recovery_certificates_new
-            .entry(self.era as usize)
+            .recovery_certificates
+            .entry(self.era)
             .or_insert_with(VecDeque::new);
         if let Some(rc) = m.pop_front() {
             debug!("Sending RC to mempool wrapper {:?}", rc);
@@ -466,7 +452,12 @@ impl OptimisticCompiler {
         self.state = State::Steady;
         info!("Entering steady state. Era {}", self.era);
         // Remove recovery certificates of the previous era.
-        self.recovery_certificates.clear();
+        for k in 0..self.era {
+            if let Some(l) = self.recovery_certificates.get_mut(&k) {
+                l.clear();
+            }
+        }
+
         self.rc_inputted = false;
         // Clean up aggregator
         self.aggregator.cleanup_recovery_votes(&self.era);

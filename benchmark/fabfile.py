@@ -103,7 +103,7 @@ def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
         'nodes': [10],
-        'rate': [60_000],
+        'rate': [90_000],
         'tx_size': 512,
         'faults': 0,
         'duration': 150,
@@ -119,7 +119,7 @@ def remote(ctx):
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': False, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 10
+            'loopback': 20
         },
         'mempool': {
             'queue_capacity': 100_000,
