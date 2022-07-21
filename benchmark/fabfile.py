@@ -12,10 +12,10 @@ from aws.remote import Bench, BenchError
 def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
-        'nodes': 4,
+        'nodes': 5,
         'rate': 10_000,
         'tx_size': 512,
-        'faults': 0,
+        'faults': 1,
         'duration': 10,
     }
     node_params = {
@@ -102,8 +102,8 @@ def install(ctx):
 def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'nodes': [10],
-        'rate': [90_000],
+        'nodes': [16],
+        'rate': [40_000, 50_000, 60_000],
         'tx_size': 512,
         'faults': 0,
         'duration': 150,
