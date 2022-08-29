@@ -4,7 +4,7 @@ use crate::error::ConsensusResult;
 use crate::filter::Filter;
 use crate::mempool::ConsensusMempoolMessage;
 use crate::messages::Block;
-use crate::OptimisticCompiler;
+use crate::Abraxas;
 use crypto::{PublicKey, SignatureService};
 use log::info;
 use network::{NetReceiver, NetSender};
@@ -48,14 +48,8 @@ impl Consensus {
             "Consensus min block delay set to {} ms",
             parameters.min_block_delay
         );
-        info!(
-            "ddos {}",
-            parameters.ddos
-        );
-        info!(
-            "random ddos {}",
-            parameters.random_ddos
-        );
+        info!("ddos {}", parameters.ddos);
+        info!("random ddos {}", parameters.random_ddos);
 
         let (tx_network, rx_network) = channel(10000);
         let (tx_filter, rx_filter) = channel(10000);
@@ -78,7 +72,7 @@ impl Consensus {
         // Custom filter to arbitrary delay network messages.
         Filter::run(rx_filter, tx_network, parameters.clone());
 
-        let mut optimistic_compiler = OptimisticCompiler::new(
+        let mut abraxas = Abraxas::new(
             name,
             committee,
             parameters,
@@ -93,7 +87,7 @@ impl Consensus {
         )
         .await;
 
-        optimistic_compiler.run().await;
+        abraxas.run().await;
 
         Ok(())
     }

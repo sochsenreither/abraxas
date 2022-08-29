@@ -3,7 +3,7 @@ use crate::core::ConsensusMessage;
 use crate::error::ConsensusResult;
 use crate::filter::FilterInput;
 use crate::messages::{Block, QC};
-use crate::optimistic_compiler::SubProto;
+use crate::abraxas::SubProto;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use futures::stream::futures_unordered::FuturesUnordered;

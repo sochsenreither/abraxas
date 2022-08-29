@@ -1,6 +1,6 @@
 use crate::mempool::MempoolDriver;
 use crate::messages::RC;
-use crate::optimistic_compiler::SubProto;
+use crate::abraxas::SubProto;
 use crypto::Digest;
 use log::{debug, info};
 use std::collections::HashSet;

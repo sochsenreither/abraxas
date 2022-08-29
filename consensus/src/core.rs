@@ -8,7 +8,7 @@ use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{
     Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, RC, TC,
 };
-use crate::optimistic_compiler::{Event, SubProto};
+use crate::abraxas::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
 use async_recursion::async_recursion;

@@ -96,7 +96,7 @@ async fn message_handler(
     }
 }
 
-pub struct OptimisticCompiler {
+pub struct Abraxas {
     name: PublicKey,
     committee: Committee,
     era: SeqNumber,
@@ -123,7 +123,7 @@ pub struct OptimisticCompiler {
     store: Store,
 }
 
-impl OptimisticCompiler {
+impl Abraxas {
     pub async fn new(
         name: PublicKey,
         committee: Committee,

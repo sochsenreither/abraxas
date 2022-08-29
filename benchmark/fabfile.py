@@ -12,11 +12,11 @@ from aws.remote import Bench, BenchError
 def local(ctx):
     ''' Run benchmarks on localhost '''
     bench_params = {
-        'nodes': 5,
-        'rate': 10_000,
+        'nodes': 4,
+        'rate': 1_000,
         'tx_size': 512,
-        'faults': 1,
-        'duration': 10,
+        'faults': 0,
+        'duration': 60,
     }
     node_params = {
         'consensus': {
@@ -45,7 +45,7 @@ def local(ctx):
 
 
 @task
-def create(ctx, nodes=2):
+def create(ctx, nodes=8):
     ''' Create a testbed'''
     try:
         InstanceManager.make().create_instances(nodes)
@@ -102,11 +102,11 @@ def install(ctx):
 def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'nodes': [16],
-        'rate': [40_000, 50_000, 60_000],
+        'nodes': [64],
+        'rate': [20_000, 30_000, 40_000],
         'tx_size': 512,
         'faults': 0,
-        'duration': 150,
+        'duration': 60,
         'runs': 1,
     }
     node_params = {
@@ -117,7 +117,7 @@ def remote(ctx):
             'min_block_delay': 100,
             'network_delay': 20_000, # message delay on the leaders' proposals during DDoS
             'ddos': False, # True for DDoS attack on the leader, False otherwise
-            'random_ddos': False, # True for DDoS attack on the leader, False otherwise
+            'random_ddos': True, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
             'loopback': 20
         },
