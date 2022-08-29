@@ -11,8 +11,8 @@ This repo provides a minimal implementation of the Abraxas consensus protocol. T
 Abraxas is written in Rust, but all benchmarking scripts are written in Python and run with [Fabric](http://www.fabfile.org/).
 To deploy and benchmark a testbed of 4 nodes on your local machine, clone the repo and install the python dependencies:
 ```
-$ git clone https://github.com/sochsenreither/optimistic-compiler.git
-$ cd optimistic-compiler/benchmark
+$ git clone https://github.com/sochsenreither/abraxas.git
+$ cd abraxas/benchmark
 $ pip install -r requirements.txt
 ```
 You also need to install Clang (required by rocksdb) and [tmux](https://linuxize.com/post/getting-started-with-tmux/#installing-tmux) (which runs all nodes and clients in the background). Finally, run a local benchmark using fabric:

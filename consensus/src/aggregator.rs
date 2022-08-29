@@ -72,7 +72,7 @@ impl Aggregator {
         self.votes_aggregators.retain(|k, _| k >= round);
         self.timeouts_aggregators.retain(|k, _| k >= view);
     }
-    // used in optimistic compiler
+    // used in abraxas
     pub fn cleanup_recovery_votes(&mut self, era: &SeqNumber) {
         self.recovery_votes_aggregators.retain(|k, _| k >= era);
     }

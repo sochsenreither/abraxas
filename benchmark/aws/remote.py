@@ -289,7 +289,7 @@ class Bench:
             raise BenchError('Failed to update nodes', e)
 
 
-        Print.info('Running Optimistic Compiler')
+        Print.info('Running Abraxas')
 
 
         Print.info(f'{bench_parameters.faults} faults')

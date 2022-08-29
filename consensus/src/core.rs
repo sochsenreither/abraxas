@@ -58,7 +58,7 @@ pub enum ConsensusMessage {
     SyncRequestVaba(Digest, PublicKey),
     SyncReplyVaba(Block),
 
-    // Messages used by optimistic compiler
+    // Messages used by abraxas
     RecoveryVote(RecoveryVote),
     RecoveryCertificate(RC),
 }

@@ -101,7 +101,7 @@ class LocalBench:
                 )
                 self._background_run(cmd, log_file)
 
-            Print.info('Running Optimistic Compiler')
+            Print.info('Running Abraxas')
             Print.info(f'{self.faults} faults')
             Print.info(f'Timeout {self.node_parameters.timeout_delay} ms, Network delay {self.node_parameters.network_delay} ms')
             Print.info(f'DDOS attack {self.node_parameters.ddos}')
