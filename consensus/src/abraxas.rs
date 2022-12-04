@@ -9,7 +9,7 @@ use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
 use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
-use crate::{MempoolWrapper, SeqNumber};
+use crate::{MempoolWrapper, SeqNumber, MessageHandler};
 use async_recursion::async_recursion;
 use crypto::{Digest, Hash, PublicKey, SignatureService};
 use log::{debug, info, warn};
@@ -35,65 +35,8 @@ pub enum Event {
     Vote,
     Lock,
     Advance,
-    VabaOut(Block),
+    VabaOut(VecDeque<Block>),
     JolteonOut(VecDeque<Block>),
-}
-
-// Forwards messages to the correct sub protocol.
-async fn message_handler(
-    mut rx_main: Receiver<ConsensusMessage>,
-    tx_recovery: Sender<ConsensusMessage>,
-    tx_jolteon: Sender<ConsensusMessage>,
-    tx_vaba: Sender<ConsensusMessage>,
-) {
-    loop {
-        if let Some(message) = rx_main.recv().await {
-            let res = match message {
-                // Messages for jolteon
-                ConsensusMessage::ProposeJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::VoteJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::TimeoutJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::TCJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::SignedQCJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::RandomnessShareJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::RandomCoinJolteon(_) => tx_jolteon.send(message).await,
-                ConsensusMessage::SyncRequestJolteon(_, _) => tx_jolteon.send(message).await,
-                ConsensusMessage::SyncReplyJolteon(_) => tx_jolteon.send(message).await,
-
-                ConsensusMessage::LoopBack(block) => {
-                    match block.fallback {
-                        0 => tx_jolteon
-                            .send(ConsensusMessage::LoopBack(block.clone()))
-                            .await
-                            .unwrap(),
-                        _ => tx_vaba
-                            .send(ConsensusMessage::LoopBack(block.clone()))
-                            .await
-                            .unwrap(),
-                    }
-                    Ok(())
-                }
-
-                // Messages for vaba
-                ConsensusMessage::ProposeVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::VoteVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::TimeoutVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::TCVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::SignedQCVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::RandomnessShareVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::RandomCoinVaba(_) => tx_vaba.send(message).await,
-                ConsensusMessage::SyncRequestVaba(_, _) => tx_vaba.send(message).await,
-                ConsensusMessage::SyncReplyVaba(_) => tx_vaba.send(message).await,
-
-                // Recovery vote and certificate
-                _ => tx_recovery.send(message).await,
-            };
-            match res {
-                Ok(_) => (),
-                Err(e) => debug!("{}", e),
-            }
-        }
-    }
 }
 
 pub struct Abraxas {
@@ -119,8 +62,8 @@ pub struct Abraxas {
     recovery_certificates: HashMap<SeqNumber, VecDeque<RC>>, // Maps era -> recovery certificate.
     rc_inputted: bool,         // True if a recovery certificate was sent to the mempool wrapper.
     rc_received: HashSet<SeqNumber>, // Indices of already received recovery certificates.
-    tx_application_layer: Sender<Block>,
-    store: Store,
+    tx_application_layer: Sender<Block>, // Channel to send blocks to the application layer.
+    store: Store,              // Storage.
 }
 
 impl Abraxas {
@@ -173,8 +116,9 @@ impl Abraxas {
 
         // Create a message handler
         let (tx_rec, rx_rec) = channel(1_000);
+        let mut message_handler = MessageHandler::new(rx_main, tx_rec.clone(), tx_jolteon, tx_vaba);
         tokio::spawn(async move {
-            message_handler(rx_main, tx_rec.clone(), tx_jolteon, tx_vaba).await;
+            message_handler.run().await;
         });
 
         // Create synchronizer for vaba
@@ -267,13 +211,16 @@ impl Abraxas {
         let key = block.digest().to_vec();
         self.vaba_chain.push(key.clone());
         self.vaba_chain_len += 1;
+        // We panic if we get an error, because this means the store is broken. We don't want to
+        // proceed any further with a broken store.
         let value = bincode::serialize(block).expect("Failed to serialize block");
         self.store.write(key, value).await;
     }
 
     async fn get_vaba_block(&mut self, index: usize) -> Block {
         let key = self.vaba_chain[index].clone();
-        // We panic if we get an error, because this means the store is broken.
+        // We panic if we get an error, because this means the store is broken. We don't want to
+        // proceed any further with a broken store.
         self.store
             .read(key)
             .await
@@ -284,6 +231,9 @@ impl Abraxas {
 
     async fn store_block(&mut self, block: &Block) {
         let key = block.digest().to_vec();
+        self.main_chain_len += 1;
+        // We panic if we get an error, because this means the store is broken. We don't want to
+        // proceed any further with a broken store.
         let value = bincode::serialize(block).expect("Failed to serialize block");
         self.store.write(key, value).await;
     }
@@ -298,12 +248,7 @@ impl Abraxas {
             ConsensusMessage::RecoveryCertificate(rc) => {
                 self.handle_recovery_certificate(&rc).await
             }
-            _ => {
-                debug!("Wrong message type!");
-                // self.forward_message(message)
-                //     .await
-                //     .expect("Failed to forward message to sub protocol");
-            }
+            _ => debug!("Wrong message type!"),
         }
     }
 
@@ -331,7 +276,6 @@ impl Abraxas {
                     info!("Committed TX({})", base64::encode(x));
                 }
             }
-            self.main_chain_len += 1;
             self.store_block(&block).await;
             // Send all the newly committed blocks to the node's application layer.
             if let Err(e) = self.tx_application_layer.send(block).await {
@@ -345,14 +289,16 @@ impl Abraxas {
         match self.state {
             State::Steady => {
                 match event {
-                    Event::VabaOut(block) => {
-                        debug!(
-                            "VabaOut. Main len: {} Vaba len: {}, {:?}",
-                            self.main_chain_len,
-                            self.vaba_chain_len,
-                            block.clone()
-                        );
-                        self.store_vaba_block(&block).await;
+                    Event::VabaOut(mut blocks) => {
+                        while let Some(block) = blocks.pop_back() {
+                            debug!(
+                                "VabaOut. Main len: {} Vaba len: {}, {:?}",
+                                self.main_chain_len,
+                                self.vaba_chain_len,
+                                block.clone()
+                            );
+                            self.store_vaba_block(&block).await;
+                        }
                         self.ss_try_resolve().await;
                     }
                     Event::JolteonOut(blocks) => {
@@ -371,14 +317,16 @@ impl Abraxas {
                 }
             }
             State::Recovery => match event {
-                Event::VabaOut(block) => {
-                    debug!(
-                        "VabaOut. Main len: {} Vaba len: {}, {:?}",
-                        self.main_chain_len,
-                        self.vaba_chain_len,
-                        block.clone()
-                    );
-                    self.store_vaba_block(&block).await;
+                Event::VabaOut(mut blocks) => {
+                    while let Some(block) = blocks.pop_back() {
+                        debug!(
+                            "VabaOut. Main len: {} Vaba len: {}, {:?}",
+                            self.main_chain_len,
+                            self.vaba_chain_len,
+                            block.clone()
+                        );
+                        self.store_vaba_block(&block).await;
+                    }
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
                     self.rs_try_resolve().await;
@@ -549,6 +497,11 @@ impl Abraxas {
                 return self._rs_try_resolve().await;
             }
             // We got a valid recovery certificate. Set blocks, increment l and return true
+
+            // TODO: check if any blocks from the fast chain can be submitted to the main chain
+            // Look up newest block in fast chain and check if it is in the main chain. If so we can
+            // skip the rest of the blocks. Else recursively append?
+
             debug!("Valid RC received {:?}", rc);
             if self.main_chain_len < self.vaba_chain_len {
                 let mut queue = VecDeque::new();

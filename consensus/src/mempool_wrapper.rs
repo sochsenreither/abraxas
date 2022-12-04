@@ -85,8 +85,12 @@ impl MempoolWrapper {
                 (digests, None)
             }
             SubProto::Vaba => {
-                if self.buffer_vaba.len() < self.payload_amount {
-                    let payload_to_get = self.max - (self.buffer_vaba.len() * self.digest_len);
+                let mut current_txs = self.buffer_vaba.len();
+                if let Some(_) = self.rc {
+                    current_txs += 1;
+                }
+                if current_txs < self.payload_amount {
+                    let payload_to_get = self.max - (current_txs * self.digest_len);
                     let data = self.mempool_driver.get(payload_to_get).await;
                     self.log_data(&data, proto);
                 }

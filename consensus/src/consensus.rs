@@ -72,6 +72,7 @@ impl Consensus {
         // Custom filter to arbitrary delay network messages.
         Filter::run(rx_filter, tx_network, parameters.clone());
 
+        // Always run Abraxas as top level protocol. Abraxas is responsible for starting Jolteon and Vaba.
         let mut abraxas = Abraxas::new(
             name,
             committee,

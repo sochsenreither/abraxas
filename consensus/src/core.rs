@@ -1,3 +1,4 @@
+use crate::abraxas::{Event, SubProto};
 use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters};
 use crate::error::{ConsensusError, ConsensusResult};
@@ -8,7 +9,6 @@ use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{
     Block, RandomCoin, RandomnessShare, RecoveryVote, SignedQC, Timeout, Vote, QC, RC, TC,
 };
-use crate::abraxas::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
 use async_recursion::async_recursion;
@@ -44,7 +44,7 @@ pub enum ConsensusMessage {
     SyncRequestJolteon(Digest, PublicKey),
     SyncReplyJolteon(Block),
 
-    // TODO: Used by both, change
+    // Used by both protocols.
     LoopBack(Block),
 
     // Messages used by vaba
@@ -83,9 +83,9 @@ pub struct Core {
     fallback: Bool, // 0 if not in async fallback, 1 if in async fallback
     timer: Timer,
     aggregator: Aggregator,
-    tx_event: Sender<Event>,
-    rx_stop_start: Receiver<()>,
-    tx_mempool_wrapper_cmd: Sender<MempoolCmd>,
+    tx_event: Sender<Event>, // Channel for notifying the top level protocol about events
+    rx_stop_start: Receiver<()>, // Channel to start and stop Jolteon
+    tx_mempool_wrapper_cmd: Sender<MempoolCmd>, // Channel to request txs from the mempool wrapper
 }
 
 impl Core {
@@ -355,16 +355,8 @@ impl Core {
             None,
         )
         .await;
-        // Performance computation takes place in the main protocol.
-        // if !block.payload.is_empty() {
-        //     info!("Created {}", block);
 
-        //     #[cfg(feature = "benchmark")]
-        //     for x in &block.payload {
-        //         // NOTE: This log entry is used to compute performance.
-        //         info!("Incoming TX({})", base64::encode(x));
-        //     }
-        // }
+        // Performance computation takes place in the main protocol, therefore we don't log here
         debug!("Created {:?}", block);
 
         // Process our new block and broadcast it.
@@ -452,6 +444,12 @@ impl Core {
 
         // See if we can vote for this block.
         if let Some(vote) = self.make_vote(block).await {
+            // VOTE
+            self.tx_event
+                .send(Event::Vote)
+                .await
+                .expect("Failed to send event");
+
             debug!("Created {:?}", vote);
             let next_leader = self.leader_elector.get_leader(self.round + 1);
             if next_leader == self.name {
@@ -472,13 +470,7 @@ impl Core {
     }
 
     async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
-        // VOTE
-        self.tx_event
-            .send(Event::Vote)
-            .await
-            .expect("Failed to send event");
         let digest = block.digest();
-
         // Ensure the block proposer is the right leader for the round.
         ensure!(
             block.author == self.leader_elector.get_leader(block.round),

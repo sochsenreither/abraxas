@@ -1,3 +1,4 @@
+use crate::abraxas::{Event, SubProto};
 use crate::aggregator::Aggregator;
 use crate::config::{Committee, Parameters, Stake};
 use crate::core::{Bool, ConsensusMessage, HeightNumber, SeqNumber};
@@ -7,7 +8,6 @@ use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{Block, RandomCoin, RandomnessShare, SignedQC, Timeout, Vote, QC, TC};
-use crate::abraxas::{Event, SubProto};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
 use async_recursion::async_recursion;
@@ -15,7 +15,7 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, info, warn};
 use std::cmp::max;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use store::Store;
 use threshold_crypto::PublicKeySet;
@@ -550,15 +550,11 @@ impl Fallback {
         self.update_high_qc(qc);
     }
 
-    #[async_recursion]
     async fn commit_ancestors(&mut self, block: &Block) -> ConsensusResult<()> {
+        let mut to_commit = VecDeque::new();
         let mut current_block = block.clone();
         while current_block.round > self.last_committed_round {
-            // VabaOut event
-            self.tx_event
-                .send(Event::VabaOut(current_block.clone()))
-                .await
-                .unwrap();
+            to_commit.push_back(current_block.clone());
             if !current_block.payload.is_empty() {
                 // Performance computation takes place in the main protocol.
                 // info!("Committed {}", current_block);
@@ -584,6 +580,11 @@ impl Fallback {
             };
             current_block = parent;
         }
+        // VabaOut event
+        self.tx_event
+            .send(Event::VabaOut(to_commit))
+            .await
+            .expect("Failed to send event");
         Ok(())
     }
 

@@ -30,6 +30,7 @@ impl Aggregator {
     }
 
     pub fn add_recovery_vote(&mut self, rv: RecoveryVote) -> ConsensusResult<Option<RC>> {
+        // Add the new recovery vote to our aggregator and see if we have a Recovery certificate.
         self.recovery_votes_aggregators
             .entry(rv.era)
             .or_insert_with(HashMap::new)
@@ -93,6 +94,7 @@ impl RCMaker {
         }
     }
 
+    /// Try to append a recovery vote to a (partial) quorum.
     pub fn append(
         &mut self,
         vote: RecoveryVote,

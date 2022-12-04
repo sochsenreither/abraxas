@@ -195,7 +195,7 @@ class LogParser:
         consensus_max_payload_size = self.configs[0]['consensus']['max_payload_size']
         consensus_min_block_delay = self.configs[0]['consensus']['min_block_delay']
         mempool_queue_capacity = self.configs[0]['mempool']['queue_capacity']
-        # mempool_sync_retry_delay = self.configs[0]['mempool']['sync_retry_delay']
+        # mempool_sync_retry_delay = self.configs[0]['mempool']['sync_retry_delay'] #
         mempool_max_payload_size = self.configs[0]['mempool']['max_payload_size']
         mempool_min_block_delay = self.configs[0]['mempool']['min_block_delay']
 

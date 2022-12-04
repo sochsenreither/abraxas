@@ -43,7 +43,7 @@ impl Filter {
 
     async fn delay(input: FilterInput, parameters: Parameters) -> FilterInput {
         let (message, _) = &input;
-        // Only add network delay for jolteon proposals
+        // Only add network delay for jolteon proposals.
         match message {
             ConsensusMessage::ProposeJolteon(_) => {
                 if parameters.random_ddos && rand::thread_rng().gen_bool(1.0 / 5.0) {

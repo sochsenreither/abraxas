@@ -744,7 +744,7 @@ impl RC {
             weight >= committee.quorum_threshold(),
             ConsensusError::TCRequiresQuorum
         );
-        // Check the signatures.
+        // Check the signatures
         for rv in &self.recovery_votes {
             rv.verify()?;
         }
