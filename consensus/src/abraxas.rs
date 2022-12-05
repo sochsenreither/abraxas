@@ -9,7 +9,7 @@ use crate::mempool::{ConsensusMempoolMessage, MempoolDriver};
 use crate::mempool_wrapper::MempoolCmd;
 use crate::messages::{Block, RecoveryVote, RC};
 use crate::synchronizer::Synchronizer;
-use crate::{MempoolWrapper, SeqNumber, MessageHandler};
+use crate::{MempoolWrapper, MessageHandler, SeqNumber};
 use async_recursion::async_recursion;
 use crypto::{Digest, Hash, PublicKey, SignatureService};
 use log::{debug, info, warn};
@@ -330,6 +330,10 @@ impl Abraxas {
                     // We received a qc, so we need to call rs_try_vote
                     self.rs_try_vote().await;
                     self.rs_try_resolve().await;
+                }
+                Event::Vote => {
+                    // We received a qc, so we need to call rs_try_vote
+                    self.rs_try_vote().await;
                 }
                 _ => {}
             },
