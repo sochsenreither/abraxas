@@ -46,7 +46,7 @@ impl Filter {
         // Only add network delay for jolteon proposals.
         match message {
             ConsensusMessage::ProposeJolteon(_) => {
-                if parameters.random_ddos && rand::thread_rng().gen_bool(1.0 / 5.0) {
+                if parameters.random_ddos && rand::thread_rng().gen_bool(10.0 / 100.0) {
                     info!("Random ddos!");
                     sleep(Duration::from_millis(parameters.network_delay)).await;
                 } else if parameters.ddos {
