@@ -16,7 +16,7 @@ def local(ctx):
         'rate': 1_000,
         'tx_size': 512,
         'faults': 0,
-        'duration': 120,
+        'duration': 50,
     }
     node_params = {
         'consensus': {
@@ -28,7 +28,8 @@ def local(ctx):
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': True, # True for random DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 20
+            'loopback': 20,
+            'ddos_chance': 5 # chance in percent for ddos
         },
         'mempool': {
             'queue_capacity': 10_000,
@@ -102,11 +103,11 @@ def install(ctx):
 def remote(ctx):
     ''' Run benchmarks on AWS '''
     bench_params = {
-        'nodes': [64],
+        'nodes': [16],
         'rate': [20_000, 30_000, 40_000],
         'tx_size': 512,
         'faults': 0,
-        'duration': 60,
+        'duration': 180,
         'runs': 1,
     }
     node_params = {
@@ -119,7 +120,8 @@ def remote(ctx):
             'ddos': False, # True for DDoS attack on the leader, False otherwise
             'random_ddos': True, # True for DDoS attack on the leader, False otherwise
             'exp': 5, # multiplicative factor for exponential fallback
-            'loopback': 20
+            'loopback': 20,
+            'ddos_chance': 5 # chance in percent for ddos
         },
         'mempool': {
             'queue_capacity': 100_000,

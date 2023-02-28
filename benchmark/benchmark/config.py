@@ -112,6 +112,7 @@ class NodeParameters:
             inputs += [json['consensus']['random_ddos']]
             inputs += [json['consensus']['exp']]
             inputs += [json['consensus']['loopback']] #
+            inputs += [json['consensus']['ddos_chance']] #
             inputs += [json['mempool']['queue_capacity']]
             inputs += [json['consensus']['sync_retry_delay']]
             inputs += [json['mempool']['max_payload_size']]
@@ -127,6 +128,7 @@ class NodeParameters:
         self.ddos = json['consensus']['ddos']
         self.random_ddos = json['consensus']['random_ddos']
         self.loopback = json['consensus']['loopback']
+        self.ddos_chance = json['consensus']['ddos_chance']
         self.json = json
 
     def print(self, filename):

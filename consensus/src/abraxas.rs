@@ -80,6 +80,7 @@ impl Abraxas {
         tx_commit: Sender<Block>,
         tx_consensus_mempool: Sender<ConsensusMempoolMessage>,
     ) -> Self {
+        info!("DDOS CHANCE: {}", parameters.ddos_chance);
         // Channel for receiving and sending events for the sub protocols.
         let (tx_event, rx_event) = channel(1_000);
 
