@@ -50,6 +50,7 @@ impl Consensus {
         );
         info!("ddos {}", parameters.ddos);
         info!("random ddos {}", parameters.random_ddos);
+        info!("random ddos chance {}", parameters.ddos_chance);
 
         let (tx_network, rx_network) = channel(10000);
         let (tx_filter, rx_filter) = channel(10000);

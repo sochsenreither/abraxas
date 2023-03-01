@@ -242,7 +242,7 @@ class LogParser:
             f.write(self.result())
 
     @classmethod
-    def process(cls, directory, faults=0, ddos=False, random_ddos=False, loopback=20, ddos_chance=0.1):
+    def process(cls, directory, faults=0, ddos=False, random_ddos=False, loopback=20, ddos_chance=10):
         assert isinstance(directory, str)
 
         clients = []
